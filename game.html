@@ -75,7 +75,7 @@ const ROT_SPEED=380;   // град/сек — скорость доводки в
 function rotateTile(idx,dir){ const t=tiles[idx];
   t.m=(t.m+dir+6)%6; t.ang=60*t.m; t.roads=buildRoads(t.cx,t.cy,t.ang);
   t.spin=Math.max(-110,Math.min(110, t.spin - dir*60));   // визуальный доворот: старт со старого угла, плавно к 0
-  for(const c of cars) if(idx===c.ti){ c.from=(c.from+dir+6)%6; c.spd=0; } } // машинка остаётся на своей (повернувшейся) дороге, тормозит
+  for(const c of cars) if(idx===c.ti){ c.from=(c.from+dir+6)%6; c.spd=0; c.momentum=0; } } // остаётся на своей дороге; сбрасывает набранную скорость
 
 // Трасса машинки: идём вперёд от (ti,from); замкнута, если вернулись в старт, не уткнувшись в край.
 function computeLoop(car){

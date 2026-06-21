@@ -42,13 +42,21 @@ function roadGeom(li,lj,cx,cy,angDeg){
 }
 function buildRoads(cx,cy,ang){ return [roadGeom(0,1,cx,cy,ang), roadGeom(2,4,cx,cy,ang), roadGeom(3,5,cx,cy,ang)]; }
 
+// декор на траве плитки (цветочки/кустики) — позиции внутри incircle, чтобы не вылезали при повороте
+const FLOWERS=['#ff5d8f','#ffd400','#ff7a3c','#b06bff','#ffffff'];
+function makeDecor(){ const n=3+Math.floor(Math.random()*4), arr=[];
+  for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2, rad=Math.random()*A*0.72;
+    arr.push({x:Math.cos(a)*rad, y:Math.sin(a)*rad, type:Math.random()<0.5?'flower':'bush',
+      col:FLOWERS[Math.floor(Math.random()*FLOWERS.length)], sc:0.8+Math.random()*0.7, rot:Math.random()*Math.PI*2}); }
+  return arr; }
+
 // ====== Поле 5x5 ======
 const tiles=[], cmap=new Map(), key=(x,y)=>Math.round(x)+","+Math.round(y);
 for(let c=0;c<COLS;c++) for(let r=0;r<ROWS;r++){
   const cx=X0+c*DX, cy=Y0+r*DY+(c%2?A:0);
   const m=Math.floor(Math.random()*6);
   cmap.set(key(cx,cy),tiles.length);
-  tiles.push({c,r,cx,cy,m,ang:60*m,spin:0,roads:buildRoads(cx,cy,60*m)});
+  tiles.push({c,r,cx,cy,m,ang:60*m,spin:0,roads:buildRoads(cx,cy,60*m),decor:makeDecor()});
 }
 function neighbor(t,e){const mid=midWorld(t.cx,t.cy,e);const k=key(2*mid[0]-t.cx,2*mid[1]-t.cy);return cmap.has(k)?cmap.get(k):-1;}
 for(const t of tiles){ t.edge=false; for(let e=0;e<6;e++) if(neighbor(t,e)<0){ t.edge=true; break; } } // крайние плитки
@@ -232,6 +240,13 @@ function lighten(hex,f){ const n=parseInt(hex.slice(1),16), r=(n>>16)&255, g=(n>
 function hexPath(t){ ctx.beginPath(); for(let k=0;k<6;k++){const a=(60*k)*D2R,x=t.cx+S*Math.cos(a),y=t.cy+S*Math.sin(a);k?ctx.lineTo(x,y):ctx.moveTo(x,y);} ctx.closePath(); }
 function drawFences(){ ctx.lineWidth=1; ctx.strokeStyle='rgba(20,55,15,0.22)'; for(const t of tiles){ hexPath(t); ctx.stroke(); } } // швы плиток на траве
 function withSpin(t,fn){ if(t.spin){ ctx.save(); ctx.translate(t.cx,t.cy); ctx.rotate(t.spin*D2R); ctx.translate(-t.cx,-t.cy); fn(); ctx.restore(); } else fn(); }
+function drawDecor(t){ for(const d of t.decor){ const x=t.cx+d.x, y=t.cy+d.y;
+  if(d.type==='bush'){ ctx.fillStyle='#3f7a36';
+    for(const o of [[-2.2,0.3],[2.2,0.3],[0,-1.6]]){ ctx.beginPath(); ctx.arc(x+o[0]*d.sc,y+o[1]*d.sc,3.4*d.sc,0,7); ctx.fill(); }
+    ctx.fillStyle='#54a046'; ctx.beginPath(); ctx.arc(x,y-1.4*d.sc,2.8*d.sc,0,7); ctx.fill();
+  } else { ctx.save(); ctx.translate(x,y); ctx.rotate(d.rot);
+    ctx.fillStyle=d.col; for(let k=0;k<5;k++){ const a=k*2*Math.PI/5; ctx.beginPath(); ctx.arc(Math.cos(a)*2.7*d.sc,Math.sin(a)*2.7*d.sc,1.9*d.sc,0,7); ctx.fill(); }
+    ctx.fillStyle='#ffd400'; ctx.beginPath(); ctx.arc(0,0,1.6*d.sc,0,7); ctx.fill(); ctx.restore(); } } }
 function drawCar(car){ const p=carPose(car), L=CAR*car.size, w=L*1.8, h=L*1.1;
   ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.heading);
   ctx.fillStyle=car.color; ctx.strokeStyle='rgba(0,0,0,.35)'; ctx.lineWidth=1.5;
@@ -340,6 +355,7 @@ function frame(now){
   ctx.fillStyle=grassPat; ctx.fillRect(0,0,FIELD_W,FIELD_H);
   if(hover>=0){ hexPath(tiles[hover]); ctx.fillStyle='rgba(255,247,150,0.35)'; ctx.fill(); }
   drawFences();
+  for(const t of tiles) withSpin(t, ()=>drawDecor(t));   // цветочки/кустики на траве, вращаются с плиткой
   // база: все дороги (внутри плитки z-порядок -> мосты)
   for(let z=0;z<3;z++) for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti]; withSpin(t, ()=>drawRoad(t.roads[z], surf(ti+":"+z))); }
   // поверх — только плитки с машинками: дорога/машинка с интерливингом по уровням

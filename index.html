@@ -5,21 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HexCar — демо</title>
 <style>
-  html,body{margin:0;height:100%;background:#2b2b2b;display:flex;align-items:center;justify-content:center;font:13px sans-serif;color:#bbb;}
-  #wrap{display:flex;flex-direction:column;align-items:center;gap:8px;}
-  canvas{background:#fff;box-shadow:0 0 24px #0008;border-radius:6px;cursor:pointer;}
-  .hint{opacity:.8}
+  html,body{margin:0;height:100%;overflow:hidden;background:#2b2b2b;font:13px sans-serif;color:#ccc;}
+  #cv{display:block;cursor:pointer;}
+  .hint{position:fixed;left:0;right:0;bottom:8px;text-align:center;pointer-events:none;opacity:.8;text-shadow:0 1px 2px #000;}
 </style>
 </head>
 <body>
-<div id="wrap">
   <canvas id="cv"></canvas>
   <div class="hint">Наведи на плитку и крути: ← / → , A / S , колесо или зажми ЛКМ и тяни вбок — поворот ±60°.</div>
-</div>
 <script>
 // ====== Геометрия плитки (порт из gen_hextile.js) ======
 const S=100, A=S*Math.sqrt(3)/2, BAND=20, D2R=Math.PI/180;
-const COLS=5, ROWS=5, PAD=BAND+8;
+const COLS=7, ROWS=7, PAD=BAND+8;
 const DX=1.5*S, DY=2*A, X0=PAD+S, Y0=PAD+A;
 const FIELD_W=(COLS-1)*DX+2*S+2*PAD, FIELD_H=(ROWS-1)*DY+3*A+2*PAD;
 
@@ -51,12 +48,14 @@ for(let c=0;c<COLS;c++) for(let r=0;r<ROWS;r++){
   const cx=X0+c*DX, cy=Y0+r*DY+(c%2?A:0);
   const m=Math.floor(Math.random()*6);
   cmap.set(key(cx,cy),tiles.length);
-  tiles.push({c,r,cx,cy,m,ang:60*m,roads:buildRoads(cx,cy,60*m)});
+  tiles.push({c,r,cx,cy,m,ang:60*m,spin:0,roads:buildRoads(cx,cy,60*m)});
 }
 function neighbor(t,e){const mid=midWorld(t.cx,t.cy,e);const k=key(2*mid[0]-t.cx,2*mid[1]-t.cy);return cmap.has(k)?cmap.get(k):-1;}
 function roadByEdge(t,e){for(let zi=0;zi<3;zi++){const rd=t.roads[zi];if(rd.edges[0]===e||rd.edges[1]===e)return{rd,zi};}return null;}
+const ROT_SPEED=380;   // град/сек — скорость доводки визуального поворота
 function rotateTile(idx,dir){ const t=tiles[idx]; t.m=(t.m+dir+6)%6; t.ang=60*t.m; t.roads=buildRoads(t.cx,t.cy,t.ang);
-  for(const c of cars) if(idx===c.ti) c.spd=0; }   // поворот плитки с машинкой -> резко тормозим
+  t.spin=Math.max(-110,Math.min(110, t.spin - dir*60));   // визуальный доворот: старт со старого угла, плавно к 0
+  for(const c of cars) if(idx===c.ti) c.spd=0; }          // поворот плитки с машинкой -> резко тормозим
 
 // Трасса машинки: идём вперёд от (ti,from); замкнута, если вернулись в старт, не уткнувшись в край.
 function computeLoop(car){
@@ -142,10 +141,12 @@ function pointInHex(px,py,t){
 }
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
 const dpr=window.devicePixelRatio||1;
-const SCALE=Math.min(720/FIELD_H, 640/FIELD_W);
-cv.width=FIELD_W*SCALE*dpr; cv.height=FIELD_H*SCALE*dpr;
-cv.style.width=FIELD_W*SCALE+'px'; cv.style.height=FIELD_H*SCALE+'px';
-function mouseToUser(ev){const r=cv.getBoundingClientRect();return [ (ev.clientX-r.left)/SCALE, (ev.clientY-r.top)/SCALE ];}
+let SCALE=1, OX=0, OY=0;                       // масштаб и сдвиг (поле по центру окна)
+function resize(){ const W=innerWidth, H=innerHeight;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
+  SCALE=Math.min(W/FIELD_W, H/FIELD_H); OX=(W-FIELD_W*SCALE)/2; OY=(H-FIELD_H*SCALE)/2; }
+addEventListener('resize',resize); resize();
+function mouseToUser(ev){ const r=cv.getBoundingClientRect(); return [ (ev.clientX-r.left-OX)/SCALE, (ev.clientY-r.top-OY)/SCALE ]; }
 let drag=-1, dragLastX=0, dragAccum=0; const DRAG_STEP=45;
 cv.addEventListener('mousedown',ev=>{ if(ev.button!==0) return; if(hover>=0){ drag=hover; dragLastX=ev.clientX; dragAccum=0; ev.preventDefault(); } });
 window.addEventListener('mouseup',()=>{ drag=-1; });
@@ -172,6 +173,7 @@ function lighten(hex,f){ const n=parseInt(hex.slice(1),16), r=(n>>16)&255, g=(n>
   const m=c=>Math.round(255+(c-255)*f); return 'rgb('+m(r)+','+m(g)+','+m(b)+')'; } // f=0 бел., 1 цвет
 function hexPath(t){ ctx.beginPath(); for(let k=0;k<6;k++){const a=(60*k)*D2R,x=t.cx+S*Math.cos(a),y=t.cy+S*Math.sin(a);k?ctx.lineTo(x,y):ctx.moveTo(x,y);} ctx.closePath(); }
 function drawFences(){ ctx.lineWidth=1; ctx.strokeStyle='#dadada'; for(const t of tiles){ hexPath(t); ctx.stroke(); } }
+function withSpin(t,fn){ if(t.spin){ ctx.save(); ctx.translate(t.cx,t.cy); ctx.rotate(t.spin*D2R); ctx.translate(-t.cx,-t.cy); fn(); ctx.restore(); } else fn(); }
 function drawCar(car){ const p=carPose(car), L=CAR*car.size, w=L*1.8, h=L*1.1;
   ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.heading);
   ctx.fillStyle=car.color; ctx.strokeStyle='rgba(0,0,0,.35)'; ctx.lineWidth=1.5;
@@ -199,6 +201,7 @@ function frame(now){
   const dt=Math.min(0.05,(now-last)/1000); last=now;
 
   for(const c of cars) advance(c,dt);
+  for(const t of tiles) if(t.spin){ const s=Math.sign(t.spin); t.spin-=s*ROT_SPEED*dt; if(Math.sign(t.spin)!==s) t.spin=0; } // доводка поворота
 
   // круги всех машинок: каждая закольцованная красит свою трассу своим цветом
   const roadColor=new Map(); loopSets=[]; closedFlags=[];
@@ -215,16 +218,17 @@ function frame(now){
     if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){ crashCar(a); crashCar(b); }
   }
 
-  ctx.setTransform(SCALE*dpr,0,0,SCALE*dpr,0,0);
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);    // очистить всё окно
+  ctx.setTransform(SCALE*dpr,0,0,SCALE*dpr, OX*dpr, OY*dpr);               // поле по центру окна
   ctx.fillStyle='#fff'; ctx.fillRect(0,0,FIELD_W,FIELD_H);
   if(hover>=0){ hexPath(tiles[hover]); ctx.fillStyle='#fff7cc'; ctx.fill(); }
   drawFences();
   const surf=k=>{ const c=roadColor.get(k); return c?lighten(c,0.4):'#fff'; };
-  for(let ti=0;ti<tiles.length;ti++) for(let zi=0;zi<3;zi++)
-    drawRoad(tiles[ti].roads[zi], surf(ti+":"+zi));
+  for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti];                  // дороги (внутри плитки крутятся при доводке)
+    withSpin(t, ()=>{ for(let zi=0;zi<3;zi++) drawRoad(t.roads[zi], surf(ti+":"+zi)); }); }
   for(const c of cars){
-    if(c.crashT>0){ drawCrash(c); }
-    else { drawCar(c); const {zi}=carRoad(c); for(let z=zi+1;z<3;z++) drawRoad(tiles[c.ti].roads[z], surf(c.ti+":"+z)); }
+    if(c.crashT>0){ drawCrash(c); continue; }
+    withSpin(tiles[c.ti], ()=>{ drawCar(c); const {zi}=carRoad(c); for(let z=zi+1;z<3;z++) drawRoad(tiles[c.ti].roads[z], surf(c.ti+":"+z)); });
   }
   if(phase==='countdown') drawCountdown();
   if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle='#ff9500'; ctx.stroke(); }

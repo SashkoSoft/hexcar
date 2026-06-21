@@ -106,15 +106,18 @@ function advance(car,dt){
   }
 }
 
-// первая машинка
-const car1=makeCar(1.0,1.0,0); cars.push(car1);
-(function(){ car1.ti=tiles.findIndex(t=>t.c===2&&t.r===2); if(car1.ti<0)car1.ti=0; car1.from=tiles[car1.ti].roads[1].edges[0]; })();
-
 // круг последней машинки -> пауза 1с -> отсчёт 3·2·1 -> ещё одна машинка (бесконечно)
 let loopSets=[], closedFlags=[];          // круги по каждой машинке
 let phase='idle';                          // 'idle' | 'wait' | 'countdown'
-let cdTimer=0, waitT=0;
-const PRE_WAIT=1.0;
+let cdTimer=0, waitT=0, score=0, best=0, resetT=-1;
+const PRE_WAIT=1.0, RESET_DELAY=0.9;
+function addStarter(){ const c=makeCar(1.0,1.0,0); c.ti=tiles.findIndex(t=>t.c===(COLS>>1)&&t.r===(ROWS>>1)); if(c.ti<0)c.ti=0; c.from=tiles[c.ti].roads[1].edges[0]; cars.push(c); }
+function resetGame(){                       // авария -> игра сначала: новое поле, одна машинка, очки в 0
+  cars.length=0; phase='idle'; cdTimer=0; waitT=0; resetT=-1; score=0;
+  for(const t of tiles){ t.m=Math.floor(Math.random()*6); t.ang=60*t.m; t.spin=0; t.roads=buildRoads(t.cx,t.cy,t.ang); }
+  addStarter();
+}
+addStarter();
 function spawnNext(){
   const car=makeCar(0.8+Math.random()*0.8, 0.6+Math.random()*1.2, Math.random()<0.5?0:1); // все разные
   for(let tries=0; tries<200; tries++){
@@ -200,24 +203,31 @@ let last=performance.now();
 function frame(now){
   const dt=Math.min(0.05,(now-last)/1000); last=now;
 
+  if(resetT>0){ resetT-=dt; if(resetT<=0) resetGame(); }                  // авария -> пауза -> игра сначала
+
   for(const c of cars) advance(c,dt);
-  for(let i=cars.length-1;i>=0;i--) if(cars[i].dead) cars.splice(i,1);     // убрать разбившиеся (не накапливаем)
-  if(cars.length===0){ spawnNext(); phase='idle'; }                       // поле не должно опустеть
+  for(let i=cars.length-1;i>=0;i--) if(cars[i].dead) cars.splice(i,1);     // убрать разбившиеся об край
+  if(cars.length===0 && resetT<0){ addStarter(); phase='idle'; }          // поле не должно опустеть
   for(const t of tiles) if(t.spin){ const s=Math.sign(t.spin); t.spin-=s*ROT_SPEED*dt; if(Math.sign(t.spin)!==s) t.spin=0; } // доводка поворота
 
-  // круги всех машинок: каждая закольцованная красит свою трассу своим цветом
-  const roadColor=new Map(); loopSets=[]; closedFlags=[];
+  // круги всех машинок: своя трасса своим цветом + очки = сумма (ячеек в круге)^2 по каждой машинке
+  const roadColor=new Map(); loopSets=[]; closedFlags=[]; score=0;
   for(let i=0;i<cars.length;i++){ const L=computeLoop(cars[i]); loopSets[i]=L.set; closedFlags[i]=L.closed;
-    if(L.closed) for(const k of L.set) roadColor.set(k, cars[i].color); }
-  const armed=cars.length-1;                          // ждём круг у последней появившейся машинки
-  if(phase==='idle' && closedFlags[armed]){ phase='wait'; waitT=PRE_WAIT; }   // бесконечно: каждая новая закольцованная -> ещё одна
-  else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ phase='countdown'; cdTimer=3.0; } }
-  else if(phase==='countdown'){ cdTimer-=dt; if(cdTimer<=0){ spawnNext(); phase='idle'; } }
-  // столкновения -> авария
-  for(let i=0;i<cars.length;i++) for(let j=i+1;j<cars.length;j++){
-    const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;
-    const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.75;
-    if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){ crashCar(a); crashCar(b); }
+    if(L.closed){ for(const k of L.set) roadColor.set(k, cars[i].color);
+      const cells=new Set([...L.set].map(k=>k.split(":")[0])).size; score+=cells*cells; } }
+  if(score>best) best=score;
+
+  if(resetT<0){                                       // спавн новых машинок (пока не идёт сброс)
+    const armed=cars.length-1;
+    if(phase==='idle' && closedFlags[armed]){ phase='wait'; waitT=PRE_WAIT; }
+    else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ phase='countdown'; cdTimer=3.0; } }
+    else if(phase==='countdown'){ cdTimer-=dt; if(cdTimer<=0){ spawnNext(); phase='idle'; } }
+    // столкновение машинок = АВАРИЯ -> игра сначала
+    for(let i=0;i<cars.length && resetT<0;i++) for(let j=i+1;j<cars.length;j++){
+      const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;
+      const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.75;
+      if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){ crashCar(a); crashCar(b); resetT=RESET_DELAY; break; }
+    }
   }
 
   ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);    // очистить всё окно
@@ -234,6 +244,16 @@ function frame(now){
   }
   if(phase==='countdown') drawCountdown();
   if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle='#ff9500'; ctx.stroke(); }
+
+  // ===== HUD (экранные координаты) =====
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.textAlign='left'; ctx.textBaseline='top'; ctx.lineJoin='round';
+  ctx.fillStyle='#111'; ctx.strokeStyle='#fff'; ctx.lineWidth=4;
+  ctx.font='bold 34px sans-serif'; ctx.strokeText('Очки: '+score,16,12); ctx.fillText('Очки: '+score,16,12);
+  ctx.font='bold 18px sans-serif'; ctx.strokeText('Рекорд: '+best,16,52); ctx.fillText('Рекорд: '+best,16,52);
+  if(resetT>0){ ctx.textAlign='center'; ctx.fillStyle='#d11'; ctx.strokeStyle='#fff'; ctx.lineWidth=6;
+    ctx.font='bold 56px sans-serif'; const x=innerWidth/2,y=innerHeight*0.3;
+    ctx.strokeText('АВАРИЯ!',x,y); ctx.fillText('АВАРИЯ!',x,y); }
 
   requestAnimationFrame(frame);
 }

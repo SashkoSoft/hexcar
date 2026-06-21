@@ -231,6 +231,14 @@ const grassPat=(function(){ const g=document.createElement('canvas'); g.width=g.
   for(let i=0;i<26;i++){ x.fillStyle=Math.random()<0.5?'rgba(205,225,185,0.5)':'rgba(70,100,60,0.5)';   // камешки/росинки
     x.beginPath(); x.arc(Math.random()*128,Math.random()*128, 0.8+Math.random()*1.5,0,7); x.fill(); }
   return ctx.createPattern(g,'repeat'); })();
+// текстура покрытия дороги (почти белый «бетон» с лёгкой крошкой)
+const roadPat=(function(){ const g=document.createElement('canvas'); g.width=g.height=48; const x=g.getContext('2d');
+  x.fillStyle='#f4f2ec'; x.fillRect(0,0,48,48);
+  for(let i=0;i<140;i++){ x.fillStyle=Math.random()<0.5?'rgba(196,193,186,0.55)':'rgba(255,255,255,0.7)';
+    x.beginPath(); x.arc(Math.random()*48,Math.random()*48, 0.5+Math.random()*1.3,0,7); x.fill(); }
+  x.strokeStyle='rgba(172,170,162,0.4)'; x.lineWidth=0.7;
+  for(let i=0;i<6;i++){ const sx=Math.random()*48, sy=Math.random()*48; x.beginPath(); x.moveTo(sx,sy); x.lineTo(sx+(Math.random()*10-5),sy+(Math.random()*10-5)); x.stroke(); }
+  return ctx.createPattern(g,'repeat'); })();
 let SCALE=1, OX=0, OY=0;                       // масштаб и сдвиг (поле по центру окна)
 function resize(){ const W=innerWidth, H=innerHeight;
   cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
@@ -263,8 +271,7 @@ window.addEventListener('keydown',ev=>{
 // ====== Отрисовка ======
 const ROAD_W=BAND, SURF_W=BAND-6;
 function strokeArc(rd,w,color){ ctx.beginPath(); ctx.arc(rd.C[0],rd.C[1],rd.R, rd.a1, rd.a1+rd.delta, rd.delta<0); ctx.lineWidth=w; ctx.strokeStyle=color; ctx.lineCap='butt'; ctx.stroke(); }
-const ASPHALT='#9a9a9a';
-function drawRoadNoShadow(rd,surf){ strokeArc(rd,ROAD_W,'#222'); strokeArc(rd,SURF_W, surf||ASPHALT); }
+function drawRoadNoShadow(rd,surf){ strokeArc(rd,ROAD_W, surf||roadPat); }   // без чёрных бортов: только покрытие
 function drawRoad(rd,surf){
   ctx.save(); ctx.globalAlpha=0.22; ctx.translate(2,3); strokeArc(rd,ROAD_W+1,'#000'); ctx.restore(); // тень -> эффект моста
   drawRoadNoShadow(rd,surf); }
@@ -312,7 +319,7 @@ function drawPopups(){ for(const p of popups){ const k=p.life/POP_DUR; // 0..1
   ctx.fillStyle=p.col; ctx.strokeStyle='#fff'; ctx.lineWidth=5; ctx.lineJoin='round';
   ctx.font='bold 46px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.strokeText(p.txt,0,0); ctx.fillText(p.txt,0,0); ctx.restore(); } ctx.globalAlpha=1; }
-function surf(k){ const c=roadColor.get(k); return c?lighten(c,0.5):ASPHALT; }
+function surf(k){ const c=roadColor.get(k); return c?lighten(c,0.5):roadPat; }
 // меню режимов
 function menuRects(){ const W=innerWidth,H=innerHeight, bw=Math.min(440,W*0.82), bh=66, gap=16;
   const total=MENU.length*bh+(MENU.length-1)*gap, y0=H/2-total/2+24;

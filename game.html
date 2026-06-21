@@ -77,7 +77,7 @@ const PALETTE=['#e23b2e','#2e8be2','#34a853','#f4b400','#9b30e2','#00b3a4','#ff6
 const SLOW=55, FAST=120, RAMP=12, RECOVER=0.7, CRASH_DUR=0.55, CAR=11;
 const cars=[];
 function pickColor(){ const used=new Set(cars.map(c=>c.color)); const av=PALETTE.filter(c=>!used.has(c)); const pool=av.length?av:PALETTE; return pool[Math.floor(Math.random()*pool.length)]; }
-function makeCar(size,weight,shape){ return {ti:0,from:0,t:0,size,weight,shape,color:pickColor(),spd:1,momentum:0,crashT:-1,crashPos:[0,0]}; }
+function makeCar(size,weight,shape){ return {ti:0,from:0,t:0,size,weight,shape,color:pickColor(),spd:1,momentum:0,crashT:-1,crashPos:[0,0],dead:false}; }
 function placeRandom(car){ car.ti=Math.floor(Math.random()*tiles.length); const rd=tiles[car.ti].roads[Math.floor(Math.random()*3)]; car.from=rd.edges[Math.floor(Math.random()*2)]; car.t=0; car.spd=0; car.momentum=0; }
 function carRoad(car){ return roadByEdge(tiles[car.ti], car.from); }
 function carPose(car){
@@ -89,7 +89,7 @@ function carPose(car){
 }
 function crashCar(car){ const p=carPose(car); car.crashPos=[p.x,p.y]; car.crashT=CRASH_DUR; }
 function advance(car,dt){
-  if(car.crashT>0){ car.crashT-=dt; if(car.crashT<=0){ car.crashT=-1; car.color=pickColor(); placeRandom(car); } return; }
+  if(car.crashT>0){ car.crashT-=dt; if(car.crashT<=0){ car.dead=true; } return; } // после аварии машинка исчезает
   car.spd=Math.min(1, car.spd+dt/RECOVER);
   car.momentum=Math.min(1, car.momentum+dt/(RAMP*car.weight)); // тяжёлая разгоняется дольше
   const speed=(SLOW+(FAST-SLOW)*car.momentum)/car.weight;       // и едет медленнее
@@ -201,6 +201,8 @@ function frame(now){
   const dt=Math.min(0.05,(now-last)/1000); last=now;
 
   for(const c of cars) advance(c,dt);
+  for(let i=cars.length-1;i>=0;i--) if(cars[i].dead) cars.splice(i,1);     // убрать разбившиеся (не накапливаем)
+  if(cars.length===0){ spawnNext(); phase='idle'; }                       // поле не должно опустеть
   for(const t of tiles) if(t.spin){ const s=Math.sign(t.spin); t.spin-=s*ROT_SPEED*dt; if(Math.sign(t.spin)!==s) t.spin=0; } // доводка поворота
 
   // круги всех машинок: каждая закольцованная красит свою трассу своим цветом

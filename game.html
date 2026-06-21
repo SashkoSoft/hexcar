@@ -66,7 +66,7 @@ function makeDecor(cx,cy){ const rd0=buildRoads(cx,cy,0);   // дороги в �
   const arr=[]; let placed,guard;
   // много мелких камешков вплотную к дороге
   placed=0; guard=0; while(placed<16 && guard++<600){ const a=Math.random()*Math.PI*2, rad=Math.random()*A*0.86, x=Math.cos(a)*rad, y=Math.sin(a)*rad;
-    const off=dist(cx+x,cy+y)-HW; if(off>4 && off<13){ arr.push(makeItem('rock',x,y)); placed++; } }   // россыпь за обочиной
+    const off=dist(cx+x,cy+y)-HW; if(off>2 && off<12){ arr.push(makeItem('rock',x,y)); placed++; } }   // россыпь вдоль дороги
   // растения по удалённости от дороги
   placed=0; guard=0; while(placed<12 && guard++<500){ const a=Math.random()*Math.PI*2, rad=Math.random()*A*0.82, x=Math.cos(a)*rad, y=Math.sin(a)*rad;
     const off=dist(cx+x,cy+y)-HW; if(off<2) continue; const mix=Math.random(); let type;
@@ -231,13 +231,8 @@ const grassPat=(function(){ const g=document.createElement('canvas'); g.width=g.
   for(let i=0;i<26;i++){ x.fillStyle=Math.random()<0.5?'rgba(205,225,185,0.5)':'rgba(70,100,60,0.5)';   // камешки/росинки
     x.beginPath(); x.arc(Math.random()*128,Math.random()*128, 0.8+Math.random()*1.5,0,7); x.fill(); }
   return ctx.createPattern(g,'repeat'); })();
-function mkPat(base, specks){ const g=document.createElement('canvas'); g.width=g.height=48; const x=g.getContext('2d');
-  x.fillStyle=base; x.fillRect(0,0,48,48);
-  for(let i=0;i<160;i++){ x.fillStyle=specks[Math.floor(Math.random()*specks.length)];
-    x.beginPath(); x.arc(Math.random()*48,Math.random()*48, 0.5+Math.random()*1.5,0,7); x.fill(); }
-  return ctx.createPattern(g,'repeat'); }
-const asphaltPat=mkPat('#8e8e8e',['rgba(60,60,60,0.5)','rgba(120,120,120,0.5)','rgba(205,205,205,0.4)','rgba(40,40,40,0.4)']);
-const gravelPat =mkPat('#b6a98f',['rgba(140,125,100,0.6)','rgba(205,195,172,0.6)','rgba(120,120,120,0.5)','rgba(90,80,64,0.5)']);
+const ASPH='#c6c6c6';                 // светлый асфальт (без пятен)
+const EDGE='rgba(255,255,255,0.9)';   // сплошные краевые линии
 let SCALE=1, OX=0, OY=0;                       // масштаб и сдвиг (поле по центру окна)
 function resize(){ const W=innerWidth, H=innerHeight;
   cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
@@ -270,12 +265,14 @@ window.addEventListener('keydown',ev=>{
 // ====== Отрисовка ======
 const ROAD_W=BAND, SURF_W=BAND-6;
 function strokeArc(rd,w,color){ ctx.beginPath(); ctx.arc(rd.C[0],rd.C[1],rd.R, rd.a1, rd.a1+rd.delta, rd.delta<0); ctx.lineWidth=w; ctx.strokeStyle=color; ctx.lineCap='butt'; ctx.stroke(); }
-function drawMarking(rd){ ctx.save(); ctx.setLineDash([7,9]); ctx.lineWidth=1.6; ctx.strokeStyle='rgba(255,224,120,0.85)';
-  ctx.beginPath(); ctx.arc(rd.C[0],rd.C[1],rd.R, rd.a1, rd.a1+rd.delta, rd.delta<0); ctx.stroke(); ctx.restore(); }
-function drawRoadNoShadow(rd,surf){    // гравийная обочина -> асфальт -> разметка (без чёрных бортов)
-  strokeArc(rd, ROAD_W+8, gravelPat); strokeArc(rd, ROAD_W, surf||asphaltPat); drawMarking(rd); }
+function strokeArcAt(rd,roff,w,color){ ctx.beginPath(); ctx.arc(rd.C[0],rd.C[1],rd.R+roff, rd.a1, rd.a1+rd.delta, rd.delta<0); ctx.lineWidth=w; ctx.strokeStyle=color; ctx.lineCap='butt'; ctx.stroke(); }
+const EDGE_OFF=ROAD_W/2-3.5;          // отступ краевых линий от края дороги
+function drawRoadNoShadow(rd,surf){    // асфальт + сплошные краевые линии (с отступом) + пунктир по центру
+  strokeArc(rd, ROAD_W, surf||ASPH);
+  strokeArcAt(rd,  EDGE_OFF, 1.6, EDGE); strokeArcAt(rd, -EDGE_OFF, 1.6, EDGE);
+  ctx.save(); ctx.setLineDash([7,9]); strokeArcAt(rd, 0, 1.5, 'rgba(255,224,120,0.85)'); ctx.restore(); }
 function drawRoad(rd,surf){
-  ctx.save(); ctx.globalAlpha=0.2; ctx.translate(2,3); strokeArc(rd,ROAD_W+9,'#000'); ctx.restore(); // тень -> эффект моста
+  ctx.save(); ctx.globalAlpha=0.2; ctx.translate(2,3); strokeArc(rd,ROAD_W+1,'#000'); ctx.restore(); // тень -> эффект моста
   drawRoadNoShadow(rd,surf); }
 function lighten(hex,f){ const n=parseInt(hex.slice(1),16), r=(n>>16)&255, g=(n>>8)&255, b=n&255;
   const m=c=>Math.round(255+(c-255)*f); return 'rgb('+m(r)+','+m(g)+','+m(b)+')'; } // f=0 бел., 1 цвет
@@ -321,7 +318,7 @@ function drawPopups(){ for(const p of popups){ const k=p.life/POP_DUR; // 0..1
   ctx.fillStyle=p.col; ctx.strokeStyle='#fff'; ctx.lineWidth=5; ctx.lineJoin='round';
   ctx.font='bold 46px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.strokeText(p.txt,0,0); ctx.fillText(p.txt,0,0); ctx.restore(); } ctx.globalAlpha=1; }
-function surf(k){ const c=roadColor.get(k); return c?lighten(c,0.5):asphaltPat; }
+function surf(k){ const c=roadColor.get(k); return c?lighten(c,0.5):ASPH; }
 // меню режимов
 function menuRects(){ const W=innerWidth,H=innerHeight, bw=Math.min(440,W*0.82), bh=66, gap=16;
   const total=MENU.length*bh+(MENU.length-1)*gap, y0=H/2-total/2+24;

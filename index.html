@@ -42,12 +42,19 @@ function roadGeom(li,lj,cx,cy,angDeg){
 }
 function buildRoads(cx,cy,ang){ return [roadGeom(0,1,cx,cy,ang), roadGeom(2,4,cx,cy,ang), roadGeom(3,5,cx,cy,ang)]; }
 
-// декор на траве плитки (цветочки/кустики) — позиции внутри incircle, чтобы не вылезали при повороте
-const FLOWERS=['#ff5d8f','#ffd400','#ff7a3c','#b06bff','#ffffff'];
-function makeDecor(){ const n=3+Math.floor(Math.random()*4), arr=[];
-  for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2, rad=Math.random()*A*0.72;
-    arr.push({x:Math.cos(a)*rad, y:Math.sin(a)*rad, type:Math.random()<0.5?'flower':'bush',
-      col:FLOWERS[Math.floor(Math.random()*FLOWERS.length)], sc:0.8+Math.random()*0.7, rot:Math.random()*Math.PI*2}); }
+// декор на траве плитки (цветочки/кустики/камешки) — позиции внутри incircle, чтобы не вылезали при повороте
+const FLOWERS=['#ff5d8f','#ffd400','#ff7a3c','#b06bff','#ffffff','#ff3b3b','#4db6ff','#ff9ec7','#ffec5c'];
+const CENTERS=['#ffd400','#ffae00','#fff3b0','#ff7a3c'];
+const BUSH=['#3f7a36','#356b2e','#487f3a','#2f6b2c','#5a9a3e'];
+function makeDecor(){ const n=6+Math.floor(Math.random()*6), arr=[];   // побольше: 6..11
+  for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2, rad=Math.random()*A*0.74, r=Math.random();
+    const it={x:Math.cos(a)*rad, y:Math.sin(a)*rad, sc:0.85+Math.random()*1.05, rot:Math.random()*Math.PI*2};
+    if(r<0.52){ it.type='flower'; it.col=FLOWERS[Math.floor(Math.random()*FLOWERS.length)]; it.cen=CENTERS[Math.floor(Math.random()*CENTERS.length)];
+      it.petals=4+Math.floor(Math.random()*4); it.plen=2.2+Math.random()*1.8; it.prad=1.4+Math.random()*1.2; }
+    else if(r<0.9){ it.type='bush'; it.col=BUSH[Math.floor(Math.random()*BUSH.length)]; it.blobs=3+Math.floor(Math.random()*3);
+      it.berry=Math.random()<0.4; it.bcol=Math.random()<0.5?'#e23b2e':'#b06bff'; }
+    else { it.type='rock'; }
+    arr.push(it); }
   return arr; }
 
 // ====== Поле 5x5 ======
@@ -194,11 +201,16 @@ function pointInHex(px,py,t){
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
 const dpr=window.devicePixelRatio||1;
 // текстура травы (вид сверху) — рисуется один раз, тайлится
-const grassPat=(function(){ const g=document.createElement('canvas'); g.width=g.height=80; const x=g.getContext('2d');
-  x.fillStyle='#5ea84e'; x.fillRect(0,0,80,80);
-  for(let i=0;i<340;i++){ const px=Math.random()*80, py=Math.random()*80, d=Math.random();
-    x.strokeStyle = d<0.5 ? 'rgba(58,128,48,0.55)' : 'rgba(150,205,115,0.5)'; x.lineWidth=1;
-    x.beginPath(); x.moveTo(px,py); x.lineTo(px+(Math.random()*2-1), py-(2+Math.random()*4)); x.stroke(); }
+const grassPat=(function(){ const g=document.createElement('canvas'); g.width=g.height=128; const x=g.getContext('2d');
+  x.fillStyle='#5ea84e'; x.fillRect(0,0,128,128);
+  const greens=['#56a046','#67b257','#4f9942','#6fb85f','#509a40'];          // пятна разных оттенков
+  x.globalAlpha=0.35; for(let i=0;i<32;i++){ x.fillStyle=greens[Math.floor(Math.random()*greens.length)];
+    x.beginPath(); x.arc(Math.random()*128,Math.random()*128, 6+Math.random()*16,0,7); x.fill(); } x.globalAlpha=1;
+  for(let i=0;i<620;i++){ const px=Math.random()*128, py=Math.random()*128, d=Math.random();   // травинки
+    x.strokeStyle = d<0.5?'rgba(56,124,46,0.5)':'rgba(150,205,115,0.5)'; x.lineWidth=1;
+    x.beginPath(); x.moveTo(px,py); x.lineTo(px+(Math.random()*3-1.5), py-(2+Math.random()*5)); x.stroke(); }
+  for(let i=0;i<26;i++){ x.fillStyle=Math.random()<0.5?'rgba(205,225,185,0.5)':'rgba(70,100,60,0.5)';   // камешки/росинки
+    x.beginPath(); x.arc(Math.random()*128,Math.random()*128, 0.8+Math.random()*1.5,0,7); x.fill(); }
   return ctx.createPattern(g,'repeat'); })();
 let SCALE=1, OX=0, OY=0;                       // масштаб и сдвиг (поле по центру окна)
 function resize(){ const W=innerWidth, H=innerHeight;
@@ -243,12 +255,15 @@ function withSpin(t,fn){ if(t.spin){ ctx.save(); ctx.translate(t.cx,t.cy); ctx.r
 // для декора: крутим на ПОЛНЫЙ угол плитки (база 60*m + анимация spin), т.к. позиции декора фиксированы
 function withTileRot(t,fn){ ctx.save(); ctx.translate(t.cx,t.cy); ctx.rotate((t.ang+t.spin)*D2R); ctx.translate(-t.cx,-t.cy); fn(); ctx.restore(); }
 function drawDecor(t){ for(const d of t.decor){ const x=t.cx+d.x, y=t.cy+d.y;
-  if(d.type==='bush'){ ctx.fillStyle='#3f7a36';
-    for(const o of [[-2.2,0.3],[2.2,0.3],[0,-1.6]]){ ctx.beginPath(); ctx.arc(x+o[0]*d.sc,y+o[1]*d.sc,3.4*d.sc,0,7); ctx.fill(); }
-    ctx.fillStyle='#54a046'; ctx.beginPath(); ctx.arc(x,y-1.4*d.sc,2.8*d.sc,0,7); ctx.fill();
+  if(d.type==='bush'){ ctx.fillStyle=d.col;
+    const offs=[[-2.4,0.4],[2.4,0.4],[0,-1.8],[-1,1.2],[1.3,1]].slice(0,d.blobs);
+    for(const o of offs){ ctx.beginPath(); ctx.arc(x+o[0]*d.sc,y+o[1]*d.sc,3.4*d.sc,0,7); ctx.fill(); }
+    if(d.berry){ ctx.fillStyle=d.bcol; for(let k=0;k<3;k++){ ctx.beginPath(); ctx.arc(x+Math.cos(k*2)*2*d.sc,y+Math.sin(k*2)*2*d.sc,1*d.sc,0,7); ctx.fill(); } }
+  } else if(d.type==='rock'){ ctx.fillStyle='#9aa0a6'; ctx.beginPath(); ctx.ellipse(x,y,4.2*d.sc,2.9*d.sc,d.rot,0,7); ctx.fill();
+    ctx.fillStyle='#c2c7cc'; ctx.beginPath(); ctx.ellipse(x-0.7*d.sc,y-0.7*d.sc,2*d.sc,1.3*d.sc,d.rot,0,7); ctx.fill();
   } else { ctx.save(); ctx.translate(x,y); ctx.rotate(d.rot);
-    ctx.fillStyle=d.col; for(let k=0;k<5;k++){ const a=k*2*Math.PI/5; ctx.beginPath(); ctx.arc(Math.cos(a)*2.7*d.sc,Math.sin(a)*2.7*d.sc,1.9*d.sc,0,7); ctx.fill(); }
-    ctx.fillStyle='#ffd400'; ctx.beginPath(); ctx.arc(0,0,1.6*d.sc,0,7); ctx.fill(); ctx.restore(); } } }
+    ctx.fillStyle=d.col; for(let k=0;k<d.petals;k++){ const a=k*2*Math.PI/d.petals; ctx.beginPath(); ctx.arc(Math.cos(a)*d.plen*d.sc,Math.sin(a)*d.plen*d.sc,d.prad*d.sc,0,7); ctx.fill(); }
+    ctx.fillStyle=d.cen; ctx.beginPath(); ctx.arc(0,0,1.6*d.sc,0,7); ctx.fill(); ctx.restore(); } } }
 function drawCar(car){ const p=carPose(car), L=CAR*car.size, w=L*1.8, h=L*1.1;
   ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.heading);
   ctx.fillStyle=car.color; ctx.strokeStyle='rgba(0,0,0,.35)'; ctx.lineWidth=1.5;
@@ -358,11 +373,11 @@ function frame(now){
   if(hover>=0){ hexPath(tiles[hover]); ctx.fillStyle='rgba(255,247,150,0.35)'; ctx.fill(); }
   drawFences();
   for(const t of tiles) withTileRot(t, ()=>drawDecor(t));   // цветочки/кустики на траве, вращаются с плиткой
-  // база: все дороги (внутри плитки z-порядок -> мосты)
-  for(let z=0;z<3;z++) for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti]; withSpin(t, ()=>drawRoad(t.roads[z], surf(ti+":"+z))); }
-  // поверх — только плитки с машинками: дорога/машинка с интерливингом по уровням
-  // (мосты внутри плитки сохранены; соседние дороги не подрезают машинку на шве; две машинки не затирают друг друга)
   const carTiles=new Set(); for(const c of cars) if(c.crashT<0) carTiles.add(c.ti);
+  // база: дороги тайлов БЕЗ машинок (каждая дорога рисуется ровно один раз -> без двойной тени на шве)
+  for(let z=0;z<3;z++) for(let ti=0;ti<tiles.length;ti++){ if(carTiles.has(ti)) continue; const t=tiles[ti]; withSpin(t, ()=>drawRoad(t.roads[z], surf(ti+":"+z))); }
+  // тайлы с машинками: дорога/машинка с интерливингом по уровням
+  // (мосты внутри плитки сохранены; соседние дороги не подрезают машинку на шве; две машинки не затирают друг друга)
   for(const ti of carTiles){ const t=tiles[ti];
     withSpin(t, ()=>{ for(let z=0;z<3;z++){ drawRoad(t.roads[z], surf(ti+":"+z));
       for(const c of cars){ if(c.crashT<0 && c.ti===ti && carRoad(c).zi===z) drawCar(c); } } }); }

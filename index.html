@@ -51,9 +51,11 @@ for(let c=0;c<COLS;c++) for(let r=0;r<ROWS;r++){
   tiles.push({c,r,cx,cy,m,ang:60*m,spin:0,roads:buildRoads(cx,cy,60*m)});
 }
 function neighbor(t,e){const mid=midWorld(t.cx,t.cy,e);const k=key(2*mid[0]-t.cx,2*mid[1]-t.cy);return cmap.has(k)?cmap.get(k):-1;}
+for(const t of tiles){ t.edge=false; for(let e=0;e<6;e++) if(neighbor(t,e)<0){ t.edge=true; break; } } // крайние плитки
 function roadByEdge(t,e){for(let zi=0;zi<3;zi++){const rd=t.roads[zi];if(rd.edges[0]===e||rd.edges[1]===e)return{rd,zi};}return null;}
 const ROT_SPEED=380;   // град/сек — скорость доводки визуального поворота
-function rotateTile(idx,dir){ const t=tiles[idx]; t.m=(t.m+dir+6)%6; t.ang=60*t.m; t.roads=buildRoads(t.cx,t.cy,t.ang);
+function rotateTile(idx,dir){ const t=tiles[idx]; if(t.edge) return;   // крайние плитки не вращаются
+  t.m=(t.m+dir+6)%6; t.ang=60*t.m; t.roads=buildRoads(t.cx,t.cy,t.ang);
   t.spin=Math.max(-110,Math.min(110, t.spin - dir*60));   // визуальный доворот: старт со старого угла, плавно к 0
   for(const c of cars) if(idx===c.ti) c.spd=0; }          // поворот плитки с машинкой -> резко тормозим
 
@@ -171,7 +173,9 @@ window.addEventListener('keydown',ev=>{
 // ====== Отрисовка ======
 const ROAD_W=BAND, SURF_W=BAND-6;
 function strokeArc(rd,w,color){ ctx.beginPath(); ctx.arc(rd.C[0],rd.C[1],rd.R, rd.a1, rd.a1+rd.delta, rd.delta<0); ctx.lineWidth=w; ctx.strokeStyle=color; ctx.lineCap='butt'; ctx.stroke(); }
-function drawRoad(rd,surf){ strokeArc(rd,ROAD_W,'#111'); strokeArc(rd,SURF_W, surf||'#fff'); }
+function drawRoad(rd,surf){
+  ctx.save(); ctx.globalAlpha=0.22; ctx.translate(2,3); strokeArc(rd,ROAD_W+1,'#000'); ctx.restore(); // тень -> эффект моста
+  strokeArc(rd,ROAD_W,'#111'); strokeArc(rd,SURF_W, surf||'#fff'); }
 function lighten(hex,f){ const n=parseInt(hex.slice(1),16), r=(n>>16)&255, g=(n>>8)&255, b=n&255;
   const m=c=>Math.round(255+(c-255)*f); return 'rgb('+m(r)+','+m(g)+','+m(b)+')'; } // f=0 бел., 1 цвет
 function hexPath(t){ ctx.beginPath(); for(let k=0;k<6;k++){const a=(60*k)*D2R,x=t.cx+S*Math.cos(a),y=t.cy+S*Math.sin(a);k?ctx.lineTo(x,y):ctx.moveTo(x,y);} ctx.closePath(); }
@@ -233,7 +237,7 @@ function frame(now){
   ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);    // очистить всё окно
   ctx.setTransform(SCALE*dpr,0,0,SCALE*dpr, OX*dpr, OY*dpr);               // поле по центру окна
   ctx.fillStyle='#fff'; ctx.fillRect(0,0,FIELD_W,FIELD_H);
-  if(hover>=0){ hexPath(tiles[hover]); ctx.fillStyle='#fff7cc'; ctx.fill(); }
+  if(hover>=0 && !tiles[hover].edge){ hexPath(tiles[hover]); ctx.fillStyle='#fff7cc'; ctx.fill(); }
   drawFences();
   const surf=k=>{ const c=roadColor.get(k); return c?lighten(c,0.4):'#fff'; };
   for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti];                  // дороги (внутри плитки крутятся при доводке)
@@ -243,7 +247,7 @@ function frame(now){
     withSpin(tiles[c.ti], ()=>{ drawCar(c); const {zi}=carRoad(c); for(let z=zi+1;z<3;z++) drawRoad(tiles[c.ti].roads[z], surf(c.ti+":"+z)); });
   }
   if(phase==='countdown') drawCountdown();
-  if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle='#ff9500'; ctx.stroke(); }
+  if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle=tiles[hover].edge?'#bbb':'#ff9500'; ctx.stroke(); }
 
   // ===== HUD (экранные координаты) =====
   ctx.setTransform(dpr,0,0,dpr,0,0);

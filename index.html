@@ -263,9 +263,10 @@ window.addEventListener('keydown',ev=>{
 // ====== Отрисовка ======
 const ROAD_W=BAND, SURF_W=BAND-6;
 function strokeArc(rd,w,color){ ctx.beginPath(); ctx.arc(rd.C[0],rd.C[1],rd.R, rd.a1, rd.a1+rd.delta, rd.delta<0); ctx.lineWidth=w; ctx.strokeStyle=color; ctx.lineCap='butt'; ctx.stroke(); }
+function drawRoadNoShadow(rd,surf){ strokeArc(rd,ROAD_W,'#111'); strokeArc(rd,SURF_W, surf||'#fff'); }
 function drawRoad(rd,surf){
   ctx.save(); ctx.globalAlpha=0.22; ctx.translate(2,3); strokeArc(rd,ROAD_W+1,'#000'); ctx.restore(); // тень -> эффект моста
-  strokeArc(rd,ROAD_W,'#111'); strokeArc(rd,SURF_W, surf||'#fff'); }
+  drawRoadNoShadow(rd,surf); }
 function lighten(hex,f){ const n=parseInt(hex.slice(1),16), r=(n>>16)&255, g=(n>>8)&255, b=n&255;
   const m=c=>Math.round(255+(c-255)*f); return 'rgb('+m(r)+','+m(g)+','+m(b)+')'; } // f=0 бел., 1 цвет
 function hexPath(t){ ctx.beginPath(); for(let k=0;k<6;k++){const a=(60*k)*D2R,x=t.cx+S*Math.cos(a),y=t.cy+S*Math.sin(a);k?ctx.lineTo(x,y):ctx.moveTo(x,y);} ctx.closePath(); }
@@ -397,12 +398,12 @@ function frame(now){
   drawFences();
   for(const t of tiles) withTileRot(t, ()=>drawDecor(t));   // цветочки/кустики на траве, вращаются с плиткой
   const carTiles=new Set(); for(const c of cars) if(c.crashT<0) carTiles.add(c.ti);
-  // база: дороги тайлов БЕЗ машинок (каждая дорога рисуется ровно один раз -> без двойной тени на шве)
-  for(let z=0;z<3;z++) for(let ti=0;ti<tiles.length;ti++){ if(carTiles.has(ti)) continue; const t=tiles[ti]; withSpin(t, ()=>drawRoad(t.roads[z], surf(ti+":"+z))); }
-  // тайлы с машинками: дорога/машинка с интерливингом по уровням
-  // (мосты внутри плитки сохранены; соседние дороги не подрезают машинку на шве; две машинки не затирают друг друга)
+  // база: ВСЕ дороги С ТЕНЬЮ — всегда одинаково, не зависит от машинок (тень не мерцает на стыке)
+  for(let z=0;z<3;z++) for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti]; withSpin(t, ()=>drawRoad(t.roads[z], surf(ti+":"+z))); }
+  // тайлы с машинками: перерисовка дорог БЕЗ тени + машинки интерливингом по уровням
+  // (мосты внутри плитки; соседи не подрезают машинку на шве; две машинки видны; тень не дублируется)
   for(const ti of carTiles){ const t=tiles[ti];
-    withSpin(t, ()=>{ for(let z=0;z<3;z++){ drawRoad(t.roads[z], surf(ti+":"+z));
+    withSpin(t, ()=>{ for(let z=0;z<3;z++){ drawRoadNoShadow(t.roads[z], surf(ti+":"+z));
       for(const c of cars){ if(c.crashT<0 && c.ti===ti && carRoad(c).zi===z) drawCar(c); } } }); }
   for(const c of cars) if(c.crashT>0) drawCrash(c);
   drawPopups();

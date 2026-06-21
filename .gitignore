@@ -1,3 +1,10 @@
 # рабочие референсы/скриншоты и временные файлы
 *.jpg
 .picasa.ini
+# промежуточные артефакты генерации плиток
+hex_tile_a*.png
+hex_tile_a*.svg
+hex_tile_roads.png
+hex_tile_true.png
+tile_hex*.png
+rot_idx*.txt

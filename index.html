@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HexCar — демо</title>
+<style>
+  html,body{margin:0;height:100%;background:#2b2b2b;display:flex;align-items:center;justify-content:center;font:13px sans-serif;color:#bbb;}
+  #wrap{display:flex;flex-direction:column;align-items:center;gap:8px;}
+  canvas{background:#fff;box-shadow:0 0 24px #0008;border-radius:6px;cursor:pointer;}
+  .hint{opacity:.8}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div class="hint">Наведи на плитку и крути: ← / → , A / S , колесо или зажми ЛКМ и тяни вбок — поворот ±60°.</div>
+</div>
+<script>
+// ====== Геометрия плитки (порт из gen_hextile.js) ======
+const S=100, A=S*Math.sqrt(3)/2, BAND=20, D2R=Math.PI/180;
+const COLS=5, ROWS=5, PAD=BAND+8;
+const DX=1.5*S, DY=2*A, X0=PAD+S, Y0=PAD+A;
+const FIELD_W=(COLS-1)*DX+2*S+2*PAD, FIELD_H=(ROWS-1)*DY+3*A+2*PAD;
+
+const Mpt=(k,cx,cy,ang)=>{const t=(60*k+30+ang)*D2R;return[cx+A*Math.cos(t),cy+A*Math.sin(t)];};
+const midWorld=(cx,cy,e)=>{const t=(30+60*e)*D2R;return[cx+A*Math.cos(t),cy+A*Math.sin(t)];};
+function lineIntersect(P,d,Q,e){const det=d[0]*(-e[1])-(-e[0])*d[1];const t=((Q[0]-P[0])*(-e[1])-(-e[0])*(Q[1]-P[1]))/det;return[P[0]+t*d[0],P[1]+t*d[1]];}
+const norm2pi=x=>{while(x<0)x+=2*Math.PI;while(x>=2*Math.PI)x-=2*Math.PI;return x;};
+
+function roadGeom(li,lj,cx,cy,angDeg){
+  const Mi=Mpt(li,cx,cy,angDeg), Mj=Mpt(lj,cx,cy,angDeg);
+  const th=k=>(60*k+30+angDeg)*D2R;
+  const di=[-Math.sin(th(li)),Math.cos(th(li))], dj=[-Math.sin(th(lj)),Math.cos(th(lj))];
+  const C=lineIntersect(Mi,di,Mj,dj);
+  const R=Math.hypot(Mi[0]-C[0],Mi[1]-C[1]);
+  const dO=[cx-C[0],cy-C[1]], L=Math.hypot(dO[0],dO[1]);
+  const apex=[C[0]+R*dO[0]/L, C[1]+R*dO[1]/L];
+  const ang=p=>Math.atan2(p[1]-C[1],p[0]-C[0]);
+  const a1=ang(Mi), a2=ang(Mj), av=ang(apex);
+  const up=norm2pi(a2-a1), dv=norm2pi(av-a1);
+  const delta=(dv<=up)?up:up-2*Math.PI;
+  const m=((Math.round(angDeg/60))%6+6)%6;
+  return {edges:[(li+m)%6,(lj+m)%6], C, R, a1, delta, len:R*Math.abs(delta)};
+}
+function buildRoads(cx,cy,ang){ return [roadGeom(0,1,cx,cy,ang), roadGeom(2,4,cx,cy,ang), roadGeom(3,5,cx,cy,ang)]; }
+
+// ====== Поле 5x5 ======
+const tiles=[], cmap=new Map(), key=(x,y)=>Math.round(x)+","+Math.round(y);
+for(let c=0;c<COLS;c++) for(let r=0;r<ROWS;r++){
+  const cx=X0+c*DX, cy=Y0+r*DY+(c%2?A:0);
+  const m=Math.floor(Math.random()*6);
+  cmap.set(key(cx,cy),tiles.length);
+  tiles.push({c,r,cx,cy,m,ang:60*m,roads:buildRoads(cx,cy,60*m)});
+}
+function neighbor(t,e){const mid=midWorld(t.cx,t.cy,e);const k=key(2*mid[0]-t.cx,2*mid[1]-t.cy);return cmap.has(k)?cmap.get(k):-1;}
+function roadByEdge(t,e){for(let zi=0;zi<3;zi++){const rd=t.roads[zi];if(rd.edges[0]===e||rd.edges[1]===e)return{rd,zi};}return null;}
+function rotateTile(idx,dir){ const t=tiles[idx]; t.m=(t.m+dir+6)%6; t.ang=60*t.m; t.roads=buildRoads(t.cx,t.cy,t.ang);
+  for(const c of cars) if(idx===c.ti) c.spd=0; }   // поворот плитки с машинкой -> резко тормозим
+
+// Трасса машинки: идём вперёд от (ti,from); замкнута, если вернулись в старт, не уткнувшись в край.
+function computeLoop(car){
+  const set=new Set(); let ti=car.ti, from=car.from, guard=0;
+  while(guard++<400){
+    const rb=roadByEdge(tiles[ti],from); if(!rb) return {set,closed:false};
+    set.add(ti+":"+rb.zi);
+    const rd=rb.rd, toEdge=(from===rd.edges[0])?rd.edges[1]:rd.edges[0];
+    const nb=neighbor(tiles[ti],toEdge);
+    if(nb<0) return {set,closed:false};
+    ti=nb; from=(toEdge+3)%6;
+    if(ti===car.ti && from===car.from) return {set,closed:true};
+  }
+  return {set,closed:false};
+}
+
+// ====== Машинки ======
+const PALETTE=['#e23b2e','#2e8be2','#34a853','#f4b400','#9b30e2','#00b3a4','#ff6f3c'];
+const SLOW=55, FAST=120, RAMP=12, RECOVER=0.7, CRASH_DUR=0.55, CAR=11;
+const cars=[];
+function pickColor(){ const used=new Set(cars.map(c=>c.color)); const av=PALETTE.filter(c=>!used.has(c)); const pool=av.length?av:PALETTE; return pool[Math.floor(Math.random()*pool.length)]; }
+function makeCar(size,weight,shape){ return {ti:0,from:0,t:0,size,weight,shape,color:pickColor(),spd:1,momentum:0,crashT:-1,crashPos:[0,0]}; }
+function placeRandom(car){ car.ti=Math.floor(Math.random()*tiles.length); const rd=tiles[car.ti].roads[Math.floor(Math.random()*3)]; car.from=rd.edges[Math.floor(Math.random()*2)]; car.t=0; car.spd=0; car.momentum=0; }
+function carRoad(car){ return roadByEdge(tiles[car.ti], car.from); }
+function carPose(car){
+  const {rd}=carRoad(car);
+  const fromA=(car.from===rd.edges[0]);
+  const start=fromA?rd.a1:rd.a1+rd.delta, dir=fromA?1:-1;
+  const ang=start+dir*rd.delta*car.t;
+  return {x:rd.C[0]+rd.R*Math.cos(ang), y:rd.C[1]+rd.R*Math.sin(ang), heading:ang+Math.sign(rd.delta)*dir*Math.PI/2};
+}
+function crashCar(car){ const p=carPose(car); car.crashPos=[p.x,p.y]; car.crashT=CRASH_DUR; }
+function advance(car,dt){
+  if(car.crashT>0){ car.crashT-=dt; if(car.crashT<=0){ car.crashT=-1; car.color=pickColor(); placeRandom(car); } return; }
+  car.spd=Math.min(1, car.spd+dt/RECOVER);
+  car.momentum=Math.min(1, car.momentum+dt/(RAMP*car.weight)); // тяжёлая разгоняется дольше
+  const speed=(SLOW+(FAST-SLOW)*car.momentum)/car.weight;       // и едет медленнее
+  let move=speed*car.spd*dt, guard=0;
+  while(move>0 && guard++<40){
+    const {rd}=carRoad(car);
+    const remain=(1-car.t)*rd.len;
+    if(move<remain){ car.t+=move/rd.len; break; }
+    move-=remain;
+    const toEdge=(car.from===rd.edges[0])?rd.edges[1]:rd.edges[0];
+    const nb=neighbor(tiles[car.ti],toEdge);
+    if(nb>=0){ car.ti=nb; car.from=(toEdge+3)%6; car.t=0; }
+    else { car.t=1; const m=midWorld(tiles[car.ti].cx,tiles[car.ti].cy,toEdge); car.crashPos=[m[0],m[1]]; car.crashT=CRASH_DUR; return; }
+  }
+}
+
+// первая машинка
+const car1=makeCar(1.0,1.0,0); cars.push(car1);
+(function(){ car1.ti=tiles.findIndex(t=>t.c===2&&t.r===2); if(car1.ti<0)car1.ti=0; car1.from=tiles[car1.ti].roads[1].edges[0]; })();
+
+// зелёный трек -> отсчёт -> вторая машинка
+let loopSet=new Set(), loopClosed=false;
+let phase='solo';            // 'solo' | 'countdown' | 'duo'
+let cdTimer=0, spawnLoop=null;
+function spawnCar2(){
+  const car2=makeCar(1.45,1.6,1);   // крупнее и тяжелее -> заметно медленнее
+  let placed=false;
+  if(spawnLoop && spawnLoop.size){
+    const arr=[...spawnLoop], pk=arr[Math.floor(Math.random()*arr.length)].split(":");
+    const ti=+pk[0], zi=+pk[1], rd=tiles[ti].roads[zi];
+    car2.ti=ti; car2.from=rd.edges[1]; car2.t=0; car2.spd=0; car2.momentum=0; placed=true; // встречное движение
+  }
+  if(!placed) placeRandom(car2);
+  cars.push(car2);
+}
+
+// ====== Ввод ======
+let hover=-1;
+function pointInHex(px,py,t){
+  for(let k=0;k<6;k++){
+    const a1=(60*k)*D2R, a2=(60*(k+1))*D2R;
+    const x1=t.cx+S*Math.cos(a1), y1=t.cy+S*Math.sin(a1);
+    const x2=t.cx+S*Math.cos(a2), y2=t.cy+S*Math.sin(a2);
+    if((x2-x1)*(py-y1)-(y2-y1)*(px-x1)<0) return false;
+  }
+  return true;
+}
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const dpr=window.devicePixelRatio||1;
+const SCALE=Math.min(720/FIELD_H, 640/FIELD_W);
+cv.width=FIELD_W*SCALE*dpr; cv.height=FIELD_H*SCALE*dpr;
+cv.style.width=FIELD_W*SCALE+'px'; cv.style.height=FIELD_H*SCALE+'px';
+function mouseToUser(ev){const r=cv.getBoundingClientRect();return [ (ev.clientX-r.left)/SCALE, (ev.clientY-r.top)/SCALE ];}
+let drag=-1, dragLastX=0, dragAccum=0; const DRAG_STEP=45;
+cv.addEventListener('mousedown',ev=>{ if(ev.button!==0) return; if(hover>=0){ drag=hover; dragLastX=ev.clientX; dragAccum=0; ev.preventDefault(); } });
+window.addEventListener('mouseup',()=>{ drag=-1; });
+cv.addEventListener('mousemove',ev=>{
+  if(drag>=0){ dragAccum+=ev.clientX-dragLastX; dragLastX=ev.clientX; hover=drag;
+    while(dragAccum>=DRAG_STEP){ rotateTile(drag,1);  dragAccum-=DRAG_STEP; }
+    while(dragAccum<=-DRAG_STEP){ rotateTile(drag,-1); dragAccum+=DRAG_STEP; } return; }
+  const [mx,my]=mouseToUser(ev); hover=-1;
+  for(let i=0;i<tiles.length;i++){ if(pointInHex(mx,my,tiles[i])){ hover=i; break; } }
+});
+cv.addEventListener('mouseleave',()=>{ if(drag<0) hover=-1; });
+cv.addEventListener('wheel',ev=>{ if(hover>=0){ ev.preventDefault(); rotateTile(hover, ev.deltaY>0?1:-1); } },{passive:false});
+window.addEventListener('keydown',ev=>{
+  if(hover<0) return;
+  if(ev.key==='ArrowLeft'||ev.key==='a'||ev.key==='A'){ rotateTile(hover,-1); ev.preventDefault(); }
+  else if(ev.key==='ArrowRight'||ev.key==='s'||ev.key==='S'){ rotateTile(hover,1); ev.preventDefault(); }
+});
+
+// ====== Отрисовка ======
+const ROAD_W=BAND, SURF_W=BAND-6;
+function strokeArc(rd,w,color){ ctx.beginPath(); ctx.arc(rd.C[0],rd.C[1],rd.R, rd.a1, rd.a1+rd.delta, rd.delta<0); ctx.lineWidth=w; ctx.strokeStyle=color; ctx.lineCap='butt'; ctx.stroke(); }
+function drawRoad(rd,green){ strokeArc(rd,ROAD_W,'#111'); strokeArc(rd,SURF_W, green?'#c7eccb':'#fff'); }
+function hexPath(t){ ctx.beginPath(); for(let k=0;k<6;k++){const a=(60*k)*D2R,x=t.cx+S*Math.cos(a),y=t.cy+S*Math.sin(a);k?ctx.lineTo(x,y):ctx.moveTo(x,y);} ctx.closePath(); }
+function drawFences(){ ctx.lineWidth=1; ctx.strokeStyle='#dadada'; for(const t of tiles){ hexPath(t); ctx.stroke(); } }
+function drawCar(car){ const p=carPose(car), L=CAR*car.size, w=L*1.8, h=L*1.1;
+  ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.heading);
+  ctx.fillStyle=car.color; ctx.strokeStyle='rgba(0,0,0,.35)'; ctx.lineWidth=1.5;
+  ctx.beginPath();
+  if(ctx.roundRect) ctx.roundRect(-w/2,-h/2,w,h, car.shape?h*0.45:3); else ctx.rect(-w/2,-h/2,w,h);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.fillRect(w*0.12,-h*0.34,w*0.18,h*0.68); // лобовое
+  ctx.restore(); }
+function drawCrash(car){ const p=1-Math.max(0,car.crashT)/CRASH_DUR, [x,y]=car.crashPos;
+  ctx.save(); ctx.translate(x,y); ctx.globalAlpha=1-p;
+  ctx.strokeStyle=car.color; ctx.lineWidth=3; ctx.lineCap='round';
+  for(let i=0;i<8;i++){ const a=i*Math.PI/4, r0=4+p*6, r1=8+p*26;
+    ctx.beginPath(); ctx.moveTo(Math.cos(a)*r0,Math.sin(a)*r0); ctx.lineTo(Math.cos(a)*r1,Math.sin(a)*r1); ctx.stroke(); }
+  ctx.strokeStyle='#222'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,0,6+p*24,0,2*Math.PI); ctx.stroke();
+  ctx.restore(); ctx.globalAlpha=1; }
+function drawCountdown(){ const n=Math.ceil(cdTimer), frac=cdTimer-(n-1);
+  ctx.save(); ctx.globalAlpha=Math.min(1,frac*1.6)*0.9;
+  ctx.translate(FIELD_W/2,FIELD_H/2); ctx.scale(1+(1-frac)*0.4,1+(1-frac)*0.4);
+  ctx.fillStyle='#ff7a00'; ctx.strokeStyle='#fff'; ctx.lineWidth=5;
+  ctx.font='bold '+(FIELD_H*0.2)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.strokeText(n,0,0); ctx.fillText(n,0,0); ctx.restore(); ctx.globalAlpha=1; }
+
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+
+  for(const c of cars) advance(c,dt);
+
+  const L=computeLoop(car1); loopSet=L.set; loopClosed=L.closed;   // зелёный трек по первой машинке
+  if(phase==='solo' && loopClosed){ phase='countdown'; cdTimer=3.0; spawnLoop=new Set(loopSet); }
+  if(phase==='countdown'){ cdTimer-=dt; if(cdTimer<=0){ phase='duo'; spawnCar2(); } }
+  if(phase==='duo'){                                               // столкновения -> авария
+    for(let i=0;i<cars.length;i++) for(let j=i+1;j<cars.length;j++){
+      const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;
+      const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.75;
+      if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){ crashCar(a); crashCar(b); }
+    }
+  }
+
+  ctx.setTransform(SCALE*dpr,0,0,SCALE*dpr,0,0);
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,FIELD_W,FIELD_H);
+  if(hover>=0){ hexPath(tiles[hover]); ctx.fillStyle='#fff7cc'; ctx.fill(); }
+  drawFences();
+  for(let ti=0;ti<tiles.length;ti++) for(let zi=0;zi<3;zi++)
+    drawRoad(tiles[ti].roads[zi], loopClosed && loopSet.has(ti+":"+zi));
+  for(const c of cars){
+    if(c.crashT>0){ drawCrash(c); }
+    else { drawCar(c); const {zi}=carRoad(c); for(let z=zi+1;z<3;z++) drawRoad(tiles[c.ti].roads[z], loopClosed&&loopSet.has(c.ti+":"+z)); }
+  }
+  if(phase==='countdown') drawCountdown();
+  if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle='#ff9500'; ctx.stroke(); }
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

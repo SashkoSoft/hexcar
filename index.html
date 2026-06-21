@@ -110,12 +110,15 @@ function advance(car,dt){
 
 // круг последней машинки -> пауза 1с -> отсчёт 3·2·1 -> ещё одна машинка (бесконечно)
 let loopSets=[], closedFlags=[];          // круги по каждой машинке
-let phase='idle';                          // 'idle' | 'wait' | 'countdown'
-let cdTimer=0, waitT=0, score=0, best=0, resetT=-1;
-const PRE_WAIT=1.0, RESET_DELAY=0.9;
+let phase='idle';                          // 'idle' | 'wait'
+let waitT=0, score=0, best=0, resetT=-1;
+const PRE_WAIT=1.2, RESET_DELAY=0.9;
+// всплывающие очки (+N заработано / -N потеряно), в манере бывшего отсчёта
+const popups=[], POP_DUR=1.1;
+function addPopup(x,y,d){ if(!d) return; popups.push({x,y,txt:(d>0?'+':'−')+Math.abs(d),col:d>0?'#2ecc40':'#e23b2e',life:0}); }
 function addStarter(){ const c=makeCar(1.0,1.0,0); c.ti=tiles.findIndex(t=>t.c===(COLS>>1)&&t.r===(ROWS>>1)); if(c.ti<0)c.ti=0; c.from=tiles[c.ti].roads[1].edges[0]; cars.push(c); }
 function resetGame(){                       // авария -> игра сначала: новое поле, одна машинка, очки в 0
-  cars.length=0; phase='idle'; cdTimer=0; waitT=0; resetT=-1; score=0;
+  cars.length=0; phase='idle'; waitT=0; resetT=-1; score=0; popups.length=0;
   for(const t of tiles){ t.m=Math.floor(Math.random()*6); t.ang=60*t.m; t.spin=0; t.roads=buildRoads(t.cx,t.cy,t.ang); }
   addStarter();
 }
@@ -203,12 +206,12 @@ function drawCrash(car){ const p=1-Math.max(0,car.crashT)/CRASH_DUR, [x,y]=car.c
     ctx.beginPath(); ctx.moveTo(Math.cos(a)*r0,Math.sin(a)*r0); ctx.lineTo(Math.cos(a)*r1,Math.sin(a)*r1); ctx.stroke(); }
   ctx.strokeStyle='#222'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,0,6+p*24,0,2*Math.PI); ctx.stroke();
   ctx.restore(); ctx.globalAlpha=1; }
-function drawCountdown(){ const n=Math.ceil(cdTimer), frac=cdTimer-(n-1);
-  ctx.save(); ctx.globalAlpha=Math.min(1,frac*1.6)*0.9;
-  ctx.translate(FIELD_W/2,FIELD_H/2); ctx.scale(1+(1-frac)*0.4,1+(1-frac)*0.4);
-  ctx.fillStyle='#ff7a00'; ctx.strokeStyle='#fff'; ctx.lineWidth=5;
-  ctx.font='bold '+(FIELD_H*0.2)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.strokeText(n,0,0); ctx.fillText(n,0,0); ctx.restore(); ctx.globalAlpha=1; }
+function drawPopups(){ for(const p of popups){ const k=p.life/POP_DUR; // 0..1
+  ctx.save(); ctx.globalAlpha=Math.max(0,1-k);
+  ctx.translate(p.x, p.y-k*28); ctx.scale(1+k*0.5,1+k*0.5);
+  ctx.fillStyle=p.col; ctx.strokeStyle='#fff'; ctx.lineWidth=3; ctx.lineJoin='round';
+  ctx.font='bold 22px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.strokeText(p.txt,0,0); ctx.fillText(p.txt,0,0); ctx.restore(); } ctx.globalAlpha=1; }
 
 let last=performance.now();
 function frame(now){
@@ -223,16 +226,20 @@ function frame(now){
 
   // круги всех машинок: своя трасса своим цветом + очки = сумма (ячеек в круге)^2 по каждой машинке
   const roadColor=new Map(); loopSets=[]; closedFlags=[]; score=0;
-  for(let i=0;i<cars.length;i++){ const L=computeLoop(cars[i]); loopSets[i]=L.set; closedFlags[i]=L.closed;
-    if(L.closed){ for(const k of L.set) roadColor.set(k, cars[i].color);
-      const cells=new Set([...L.set].map(k=>k.split(":")[0])).size; score+=cells*cells; } }
+  for(let i=0;i<cars.length;i++){ const c=cars[i]; const L=computeLoop(c); loopSets[i]=L.set; closedFlags[i]=L.closed;
+    let cur=0;
+    if(L.closed){ for(const k of L.set) roadColor.set(k, c.color);
+      const cells=new Set([...L.set].map(k=>k.split(":")[0])).size; cur=cells*cells; score+=cur; }
+    if(cur!==(c.loopScore||0)){ const p=carPose(c); addPopup(p.x,p.y, cur-(c.loopScore||0)); } // заработал/потерял
+    c.loopScore=cur;
+  }
   if(score>best) best=score;
+  for(let i=popups.length-1;i>=0;i--){ popups[i].life+=dt; if(popups[i].life>POP_DUR) popups.splice(i,1); }
 
   if(resetT<0){                                       // спавн новых машинок (пока не идёт сброс)
     const armed=cars.length-1;
     if(phase==='idle' && closedFlags[armed]){ phase='wait'; waitT=PRE_WAIT; }
-    else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ phase='countdown'; cdTimer=3.0; } }
-    else if(phase==='countdown'){ cdTimer-=dt; if(cdTimer<=0){ spawnNext(); phase='idle'; } }
+    else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ spawnNext(); phase='idle'; } }
     // столкновение машинок = АВАРИЯ -> игра сначала
     for(let i=0;i<cars.length && resetT<0;i++) for(let j=i+1;j<cars.length;j++){
       const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;
@@ -253,7 +260,7 @@ function frame(now){
     if(c.crashT>0){ drawCrash(c); continue; }
     withSpin(tiles[c.ti], ()=>{ drawCar(c); const {zi}=carRoad(c); for(let z=zi+1;z<3;z++) drawRoad(tiles[c.ti].roads[z], surf(c.ti+":"+z)); });
   }
-  if(phase==='countdown') drawCountdown();
+  drawPopups();
   if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle='#ff9500'; ctx.stroke(); }
 
   // ===== HUD (экранные координаты) =====

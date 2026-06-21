@@ -94,7 +94,7 @@ function advance(car,dt){
   if(car.crashT>0){ car.crashT-=dt; if(car.crashT<=0){ car.dead=true; } return; } // после аварии машинка исчезает
   car.spd=Math.min(1, car.spd+dt/RECOVER);
   car.momentum=Math.min(1, car.momentum+dt/(RAMP*car.weight)); // тяжёлая разгоняется дольше
-  const speed=(SLOW+(FAST-SLOW)*car.momentum)/car.weight;       // и едет медленнее
+  const speed=(SLOW+(FAST-SLOW)*car.momentum)/car.weight*(car.speedK||1); // speedK: полиция быстрее
   let move=speed*car.spd*dt, guard=0;
   while(move>0 && guard++<40){
     const {rd}=carRoad(car);
@@ -104,25 +104,48 @@ function advance(car,dt){
     const toEdge=(car.from===rd.edges[0])?rd.edges[1]:rd.edges[0];
     const nb=neighbor(tiles[car.ti],toEdge);
     if(nb>=0){ car.ti=nb; car.from=(toEdge+3)%6; car.t=0; }
-    else { car.t=1; const m=midWorld(tiles[car.ti].cx,tiles[car.ti].cy,toEdge); car.crashPos=[m[0],m[1]]; car.crashT=CRASH_DUR; return; }
+    else if(mode==='loops'){ car.t=1; const m=midWorld(tiles[car.ti].cx,tiles[car.ti].cy,toEdge); car.crashPos=[m[0],m[1]]; car.crashT=CRASH_DUR; return; } // об край -> краш
+    else { car.from=toEdge; car.t=0; }   // в погоне об край -> разворот
   }
 }
 
-// круг последней машинки -> пауза 1с -> отсчёт 3·2·1 -> ещё одна машинка (бесконечно)
-let loopSets=[], closedFlags=[];          // круги по каждой машинке
+// ====== Режимы и состояние ======
+let mode='loops';                 // 'loops' | 'chase' | 'bandit'
+let gameState='menu';             // 'menu' | 'play' | 'over'
+let modeTime=0, overMsg='', overSub='';
+let roadColor=new Map();          // подсветка кругов (только в 'loops')
+const MENU=[
+  {key:'loops', title:'Кольца',  desc:'Загоняй машинки в кольца, копи очки'},
+  {key:'chase', title:'Погоня',  desc:'Догони бандита своей полицейской'},
+  {key:'bandit',title:'Бандит',  desc:'Уходи от полиции как можно дольше'},
+];
+
+let loopSets=[], closedFlags=[];
 let phase='idle';                          // 'idle' | 'wait'
 let waitT=0, score=0, best=0, resetT=-1;
 const PRE_WAIT=1.2, RESET_DELAY=0.9;
-// всплывающие очки (+N заработано / -N потеряно), в манере бывшего отсчёта
+// всплывающие очки (+N заработано / -N потеряно)
 const popups=[], POP_DUR=1.1;
 function addPopup(x,y,d){ if(!d) return; popups.push({x,y,txt:(d>0?'+':'−')+Math.abs(d),col:d>0?'#2ecc40':'#e23b2e',life:0}); }
+function shuffleField(){ for(const t of tiles){ t.m=Math.floor(Math.random()*6); t.ang=60*t.m; t.spin=0; t.roads=buildRoads(t.cx,t.cy,t.ang); } }
 function addStarter(){ const c=makeCar(1.0,1.0,0); c.ti=tiles.findIndex(t=>t.c===(COLS>>1)&&t.r===(ROWS>>1)); if(c.ti<0)c.ti=0; c.from=tiles[c.ti].roads[1].edges[0]; cars.push(c); }
-function resetGame(){                       // авария -> игра сначала: новое поле, одна машинка, очки в 0
-  cars.length=0; phase='idle'; waitT=0; resetT=-1; score=0; popups.length=0;
-  for(const t of tiles){ t.m=Math.floor(Math.random()*6); t.ang=60*t.m; t.spin=0; t.roads=buildRoads(t.cx,t.cy,t.ang); }
-  addStarter();
+function resetGame(){                       // авария в 'Кольцах' -> заново: новое поле, одна машинка, очки в 0
+  cars.length=0; phase='idle'; waitT=0; resetT=-1; score=0; popups.length=0; shuffleField(); addStarter();
 }
-addStarter();
+function spawnRacer(role){                   // полиция/бандит для погони
+  const c=makeCar(role==='police'?1.05:1.0, 1.0, role==='police'?1:0);
+  c.role=role; c.color = role==='police' ? '#1f6feb' : '#e23b2e'; c.speedK = role==='police' ? 1.28 : 1.0;
+  for(let tries=0;tries<200;tries++){ placeRandom(c);
+    let ok=true; for(const o of cars){ const p=carPose(c),q=carPose(o); if((p.x-q.x)**2+(p.y-q.y)**2 < (FIELD_W*0.4)**2){ ok=false; break; } }
+    if(ok||tries>150) break; }
+  cars.push(c); return c;
+}
+function startMode(m){
+  mode=m; gameState='play'; modeTime=0; cars.length=0; popups.length=0; phase='idle'; waitT=0; resetT=-1; score=0;
+  shuffleField();
+  if(m==='loops'){ addStarter(); }
+  else { spawnRacer('bandit'); spawnRacer('police'); }   // погоня/бандит: две машинки
+}
 function spawnNext(){
   const car=makeCar(0.8+Math.random()*0.8, 0.6+Math.random()*1.2, Math.random()<0.5?0:1); // все разные
   for(let tries=0; tries<200; tries++){
@@ -163,19 +186,24 @@ function resize(){ const W=innerWidth, H=innerHeight;
 addEventListener('resize',resize); resize();
 function mouseToUser(ev){ const r=cv.getBoundingClientRect(); return [ (ev.clientX-r.left-OX)/SCALE, (ev.clientY-r.top-OY)/SCALE ]; }
 let drag=-1, dragLastX=0, dragAccum=0; const DRAG_STEP=45;
-cv.addEventListener('mousedown',ev=>{ if(ev.button!==0) return; if(hover>=0){ drag=hover; dragLastX=ev.clientX; dragAccum=0; ev.preventDefault(); } });
+cv.addEventListener('mousedown',ev=>{ if(ev.button!==0) return;
+  if(gameState==='menu'){ const r=cv.getBoundingClientRect(), mx=ev.clientX-r.left, my=ev.clientY-r.top;
+    for(const b of menuRects()) if(mx>=b.x&&mx<=b.x+b.w&&my>=b.y&&my<=b.y+b.h){ startMode(b.key); break; } return; }
+  if(gameState==='over'){ gameState='menu'; cars.length=0; return; }
+  if(hover>=0){ drag=hover; dragLastX=ev.clientX; dragAccum=0; ev.preventDefault(); } });
 window.addEventListener('mouseup',()=>{ drag=-1; });
 cv.addEventListener('mousemove',ev=>{
   if(drag>=0){ dragAccum+=ev.clientX-dragLastX; dragLastX=ev.clientX; hover=drag;
     while(dragAccum>=DRAG_STEP){ rotateTile(drag,1);  dragAccum-=DRAG_STEP; }
     while(dragAccum<=-DRAG_STEP){ rotateTile(drag,-1); dragAccum+=DRAG_STEP; } return; }
-  const [mx,my]=mouseToUser(ev); hover=-1;
+  hover=-1; if(gameState!=='play') return;
+  const [mx,my]=mouseToUser(ev);
   for(let i=0;i<tiles.length;i++){ if(pointInHex(mx,my,tiles[i])){ hover=i; break; } }
 });
 cv.addEventListener('mouseleave',()=>{ if(drag<0) hover=-1; });
-cv.addEventListener('wheel',ev=>{ if(hover>=0){ ev.preventDefault(); rotateTile(hover, ev.deltaY>0?1:-1); } },{passive:false});
+cv.addEventListener('wheel',ev=>{ if(gameState==='play'&&hover>=0){ ev.preventDefault(); rotateTile(hover, ev.deltaY>0?1:-1); } },{passive:false});
 window.addEventListener('keydown',ev=>{
-  if(hover<0) return;
+  if(gameState!=='play'||hover<0) return;
   if(ev.key==='ArrowLeft'||ev.key==='a'||ev.key==='A'){ rotateTile(hover,-1); ev.preventDefault(); }
   else if(ev.key==='ArrowRight'||ev.key==='s'||ev.key==='S'){ rotateTile(hover,1); ev.preventDefault(); }
 });
@@ -198,6 +226,8 @@ function drawCar(car){ const p=carPose(car), L=CAR*car.size, w=L*1.8, h=L*1.1;
   if(ctx.roundRect) ctx.roundRect(-w/2,-h/2,w,h, car.shape?h*0.45:3); else ctx.rect(-w/2,-h/2,w,h);
   ctx.fill(); ctx.stroke();
   ctx.fillStyle='#fff'; ctx.fillRect(w*0.12,-h*0.34,w*0.18,h*0.68); // лобовое
+  if(car.role==='police'){ ctx.fillStyle='#e11'; ctx.fillRect(-w*0.06,-h*0.46,w*0.12,h*0.42);
+    ctx.fillStyle='#16f'; ctx.fillRect(-w*0.06, h*0.04,w*0.12,h*0.42); }   // мигалка
   ctx.restore(); }
 function drawCrash(car){ const p=1-Math.max(0,car.crashT)/CRASH_DUR, [x,y]=car.crashPos;
   ctx.save(); ctx.translate(x,y); ctx.globalAlpha=1-p;
@@ -208,53 +238,96 @@ function drawCrash(car){ const p=1-Math.max(0,car.crashT)/CRASH_DUR, [x,y]=car.c
   ctx.restore(); ctx.globalAlpha=1; }
 function drawPopups(){ for(const p of popups){ const k=p.life/POP_DUR; // 0..1
   ctx.save(); ctx.globalAlpha=Math.max(0,1-k);
-  ctx.translate(p.x, p.y-k*28); ctx.scale(1+k*0.5,1+k*0.5);
-  ctx.fillStyle=p.col; ctx.strokeStyle='#fff'; ctx.lineWidth=3; ctx.lineJoin='round';
-  ctx.font='bold 22px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.translate(p.x, p.y-k*42); ctx.scale(1+k*0.7,1+k*0.7);
+  ctx.fillStyle=p.col; ctx.strokeStyle='#fff'; ctx.lineWidth=5; ctx.lineJoin='round';
+  ctx.font='bold 46px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.strokeText(p.txt,0,0); ctx.fillText(p.txt,0,0); ctx.restore(); } ctx.globalAlpha=1; }
+function surf(k){ const c=roadColor.get(k); return c?lighten(c,0.4):'#fff'; }
+// меню режимов
+function menuRects(){ const W=innerWidth,H=innerHeight, bw=Math.min(440,W*0.82), bh=66, gap=16;
+  const total=MENU.length*bh+(MENU.length-1)*gap, y0=H/2-total/2+24;
+  return MENU.map((m,i)=>({x:(W-bw)/2,y:y0+i*(bh+gap),w:bw,h:bh,key:m.key,title:m.title,desc:m.desc})); }
+function drawMenu(){ const W=innerWidth,H=innerHeight, rs=menuRects();
+  ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#fff'; ctx.font='bold 56px sans-serif'; ctx.fillText('HexCar', W/2, rs[0].y-86);
+  ctx.fillStyle='#cdd'; ctx.font='17px sans-serif'; ctx.fillText('Выбери режим', W/2, rs[0].y-44);
+  for(const b of rs){ ctx.fillStyle='#1f6feb';
+    if(ctx.roundRect){ ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,12); ctx.fill(); } else ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.fillStyle='#fff'; ctx.font='bold 25px sans-serif'; ctx.fillText(b.title, b.x+b.w/2, b.y+b.h*0.36);
+    ctx.fillStyle='#dde'; ctx.font='14px sans-serif'; ctx.fillText(b.desc, b.x+b.w/2, b.y+b.h*0.72); }
+  ctx.fillStyle='#9ab'; ctx.font='13px sans-serif'; ctx.fillText('…режимов будет больше', W/2, rs[rs.length-1].y+rs[rs.length-1].h+26); }
+function drawHUD(){ ctx.textAlign='left'; ctx.textBaseline='top'; ctx.lineJoin='round'; ctx.fillStyle='#111'; ctx.strokeStyle='#fff'; ctx.lineWidth=4;
+  if(mode==='loops'){ ctx.font='bold 34px sans-serif'; ctx.strokeText('Очки: '+score,16,12); ctx.fillText('Очки: '+score,16,12);
+    ctx.font='bold 18px sans-serif'; ctx.strokeText('Рекорд: '+best,16,52); ctx.fillText('Рекорд: '+best,16,52);
+    if(resetT>0){ ctx.textAlign='center'; ctx.fillStyle='#d11'; ctx.lineWidth=6; ctx.font='bold 56px sans-serif';
+      ctx.strokeText('АВАРИЯ!',innerWidth/2,innerHeight*0.3); ctx.fillText('АВАРИЯ!',innerWidth/2,innerHeight*0.3); }
+  } else { const lbl=mode==='chase'?'Догони бандита!':'Уходи от полиции!';
+    ctx.font='bold 26px sans-serif'; ctx.strokeText(lbl,16,12); ctx.fillText(lbl,16,12);
+    ctx.font='bold 22px sans-serif'; ctx.strokeText('Время: '+modeTime.toFixed(1)+' c',16,46); ctx.fillText('Время: '+modeTime.toFixed(1)+' c',16,46); } }
+function drawOver(){ const W=innerWidth,H=innerHeight; ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.lineJoin='round';
+  ctx.fillStyle='#ffd400'; ctx.strokeStyle='#000'; ctx.lineWidth=7; ctx.font='bold 58px sans-serif';
+  ctx.strokeText(overMsg,W/2,H*0.42); ctx.fillText(overMsg,W/2,H*0.42);
+  ctx.fillStyle='#fff'; ctx.lineWidth=4; ctx.font='bold 28px sans-serif'; ctx.strokeText(overSub,W/2,H*0.52); ctx.fillText(overSub,W/2,H*0.52);
+  ctx.fillStyle='#ccd'; ctx.font='18px sans-serif'; ctx.fillText('клик — в меню',W/2,H*0.6); }
 
-let last=performance.now();
-function frame(now){
-  const dt=Math.min(0.05,(now-last)/1000); last=now;
-
-  if(resetT>0){ resetT-=dt; if(resetT<=0) resetGame(); }                  // авария -> пауза -> игра сначала
-
+// ====== Шаги режимов ======
+function stepLoops(dt){
+  if(resetT>0){ resetT-=dt; if(resetT<=0) resetGame(); }                  // авария -> пауза -> заново
   for(const c of cars) advance(c,dt);
   for(let i=cars.length-1;i>=0;i--) if(cars[i].dead) cars.splice(i,1);     // убрать разбившиеся об край
-  if(cars.length===0 && resetT<0){ addStarter(); phase='idle'; }          // поле не должно опустеть
-  for(const t of tiles) if(t.spin){ const s=Math.sign(t.spin); t.spin-=s*ROT_SPEED*dt; if(Math.sign(t.spin)!==s) t.spin=0; } // доводка поворота
-
-  // круги всех машинок: своя трасса своим цветом + очки = сумма (ячеек в круге)^2 по каждой машинке
-  const roadColor=new Map(); loopSets=[]; closedFlags=[]; score=0;
+  if(cars.length===0 && resetT<0){ addStarter(); phase='idle'; }
+  roadColor=new Map(); loopSets=[]; closedFlags=[]; score=0;
   for(let i=0;i<cars.length;i++){ const c=cars[i]; const L=computeLoop(c); loopSets[i]=L.set; closedFlags[i]=L.closed;
     let cur=0;
     if(L.closed){ for(const k of L.set) roadColor.set(k, c.color);
       const cells=new Set([...L.set].map(k=>k.split(":")[0])).size; cur=cells*cells; score+=cur; }
-    if(cur!==(c.loopScore||0)){ const p=carPose(c); addPopup(p.x,p.y, cur-(c.loopScore||0)); } // заработал/потерял
+    if(cur!==(c.loopScore||0)){ const p=carPose(c); addPopup(p.x,p.y, cur-(c.loopScore||0)); }
     c.loopScore=cur;
   }
   if(score>best) best=score;
   for(let i=popups.length-1;i>=0;i--){ popups[i].life+=dt; if(popups[i].life>POP_DUR) popups.splice(i,1); }
-
-  if(resetT<0){                                       // спавн новых машинок (пока не идёт сброс)
+  if(resetT<0){
     const armed=cars.length-1;
     if(phase==='idle' && closedFlags[armed]){ phase='wait'; waitT=PRE_WAIT; }
     else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ spawnNext(); phase='idle'; } }
-    // столкновение машинок = АВАРИЯ -> игра сначала
     for(let i=0;i<cars.length && resetT<0;i++) for(let j=i+1;j<cars.length;j++){
       const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;
       const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.75;
       if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){ crashCar(a); crashCar(b); resetT=RESET_DELAY; break; }
     }
   }
+}
+function stepChase(dt){                  // 'chase' и 'bandit'
+  roadColor=new Map(); loopSets=[]; closedFlags=[]; modeTime+=dt;
+  for(const c of cars) advance(c,dt);
+  for(let i=popups.length-1;i>=0;i--){ popups[i].life+=dt; if(popups[i].life>POP_DUR) popups.splice(i,1); }
+  if(cars.length>=2){ const a=cars[0], b=cars[1];
+    const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.85;
+    if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){
+      gameState='over';
+      if(mode==='chase'){ overMsg='Поймал бандита!'; overSub='за '+modeTime.toFixed(1)+' c'; }
+      else { overMsg='Пойман!'; overSub='Продержался '+modeTime.toFixed(1)+' c'; }
+    }
+  }
+}
 
-  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);    // очистить всё окно
-  ctx.setTransform(SCALE*dpr,0,0,SCALE*dpr, OX*dpr, OY*dpr);               // поле по центру окна
-  ctx.fillStyle=grassPat; ctx.fillRect(0,0,FIELD_W,FIELD_H);   // трава
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  for(const t of tiles) if(t.spin){ const s=Math.sign(t.spin); t.spin-=s*ROT_SPEED*dt; if(Math.sign(t.spin)!==s) t.spin=0; } // доводка поворота
+
+  if(gameState==='play'){ if(mode==='loops') stepLoops(dt); else stepChase(dt); }
+  else { roadColor=new Map(); }
+
+  // ---- поле ----
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.setTransform(SCALE*dpr,0,0,SCALE*dpr, OX*dpr, OY*dpr);
+  ctx.fillStyle=grassPat; ctx.fillRect(0,0,FIELD_W,FIELD_H);
   if(hover>=0){ hexPath(tiles[hover]); ctx.fillStyle='rgba(255,247,150,0.35)'; ctx.fill(); }
   drawFences();
-  const surf=k=>{ const c=roadColor.get(k); return c?lighten(c,0.4):'#fff'; };
-  for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti];                  // дороги (внутри плитки крутятся при доводке)
+  for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti];
     withSpin(t, ()=>{ for(let zi=0;zi<3;zi++) drawRoad(t.roads[zi], surf(ti+":"+zi)); }); }
   for(const c of cars){
     if(c.crashT>0){ drawCrash(c); continue; }
@@ -263,15 +336,10 @@ function frame(now){
   drawPopups();
   if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle='#ff9500'; ctx.stroke(); }
 
-  // ===== HUD (экранные координаты) =====
+  // ---- HUD / экраны (экранные координаты) ----
   ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.textAlign='left'; ctx.textBaseline='top'; ctx.lineJoin='round';
-  ctx.fillStyle='#111'; ctx.strokeStyle='#fff'; ctx.lineWidth=4;
-  ctx.font='bold 34px sans-serif'; ctx.strokeText('Очки: '+score,16,12); ctx.fillText('Очки: '+score,16,12);
-  ctx.font='bold 18px sans-serif'; ctx.strokeText('Рекорд: '+best,16,52); ctx.fillText('Рекорд: '+best,16,52);
-  if(resetT>0){ ctx.textAlign='center'; ctx.fillStyle='#d11'; ctx.strokeStyle='#fff'; ctx.lineWidth=6;
-    ctx.font='bold 56px sans-serif'; const x=innerWidth/2,y=innerHeight*0.3;
-    ctx.strokeText('АВАРИЯ!',x,y); ctx.fillText('АВАРИЯ!',x,y); }
+  if(gameState==='menu') drawMenu();
+  else { drawHUD(); if(gameState==='over') drawOver(); }
 
   requestAnimationFrame(frame);
 }

@@ -123,10 +123,13 @@ const SPECS=[ {size:1.00,weight:1.00,shape:0},   // 1-я
 function spawnNext(){
   const sp=SPECS[cars.length]||{size:1.2,weight:1.1,shape:1};
   const car=makeCar(sp.size,sp.weight,sp.shape);
-  for(let tries=0; tries<120; tries++){         // НЕ на любой зелёной дорожке (объединение всех кругов)
+  for(let tries=0; tries<200; tries++){
     placeRandom(car);
-    const rb=roadByEdge(tiles[car.ti], car.from);
-    if(!loopSet.has(car.ti+":"+rb.zi)) break;
+    if(computeLoop(car).closed) continue;       // НЕ на замкнутом круге (даже если на нём пока никого нет)
+    const p=carPose(car);                        // и не вплотную к другой машинке
+    let near=false;
+    for(const o of cars){ const q=carPose(o); if((p.x-q.x)**2+(p.y-q.y)**2 < 45*45){ near=true; break; } }
+    if(!near) break;
   }
   cars.push(car);
 }

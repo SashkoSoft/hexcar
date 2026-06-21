@@ -116,8 +116,7 @@ function advance(car,dt){
     const toEdge=(car.from===rd.edges[0])?rd.edges[1]:rd.edges[0];
     const nb=neighbor(tiles[car.ti],toEdge);
     if(nb>=0){ car.ti=nb; car.from=(toEdge+3)%6; car.t=0; }
-    else if(mode==='loops'){ car.t=1; const m=midWorld(tiles[car.ti].cx,tiles[car.ti].cy,toEdge); car.crashPos=[m[0],m[1]]; car.crashT=CRASH_DUR; return; } // об край -> краш
-    else { const p=PORTAL[car.ti+":"+toEdge];   // тороидальное поле: появляемся с противоположной стороны
+    else { const p=PORTAL[car.ti+":"+toEdge];   // тороидальное поле (во всех режимах): появляемся с противоположной стороны
       if(p){ car.ti=p.dti; car.from=p.de; car.t=0; } else { car.from=toEdge; car.t=0; } }
   }
 }

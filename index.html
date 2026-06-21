@@ -111,20 +111,24 @@ function advance(car,dt){
 const car1=makeCar(1.0,1.0,0); cars.push(car1);
 (function(){ car1.ti=tiles.findIndex(t=>t.c===2&&t.r===2); if(car1.ti<0)car1.ti=0; car1.from=tiles[car1.ti].roads[1].edges[0]; })();
 
-// зелёный трек -> пауза 1с -> отсчёт 3·2·1 -> вторая машинка
+// круг -> пауза 1с -> отсчёт 3·2·1 -> следующая машинка (до MAX_CARS), затем баннер
 let loopSet=new Set(), loopClosed=false;
-let phase='solo';            // 'solo' | 'wait' | 'countdown' | 'duo'
-let cdTimer=0, waitT=0, spawnLoop=null;
-const PRE_WAIT=1.0;          // пауза перед отсчётом после позеленения трассы
-function spawnCar2(){
-  const car2=makeCar(1.45,1.6,1);   // крупнее и тяжелее -> заметно медленнее
-  // поставить НЕ на подсвеченную (зелёную) трассу
-  for(let tries=0; tries<80; tries++){
-    placeRandom(car2);
-    const rb=roadByEdge(tiles[car2.ti], car2.from);
-    if(!spawnLoop || !spawnLoop.has(car2.ti+":"+rb.zi)) break;
+let loopSets=[], closedFlags=[];          // круги по каждой машинке
+let phase='idle';                          // 'idle' | 'wait' | 'countdown'
+let cdTimer=0, waitT=0, spawnLoop=null, bannerOn=false;
+const PRE_WAIT=1.0, MAX_CARS=3;
+const SPECS=[ {size:1.00,weight:1.00,shape:0},   // 1-я
+              {size:1.45,weight:1.60,shape:1},   // 2-я: крупнее и тяжелее -> медленнее
+              {size:0.85,weight:0.65,shape:0} ]; // 3-я: легче и меньше -> быстрее
+function spawnNext(){
+  const sp=SPECS[cars.length]||{size:1.2,weight:1.1,shape:1};
+  const car=makeCar(sp.size,sp.weight,sp.shape);
+  for(let tries=0; tries<80; tries++){          // НЕ на подсвеченной (зелёной) трассе
+    placeRandom(car);
+    const rb=roadByEdge(tiles[car.ti], car.from);
+    if(!spawnLoop || !spawnLoop.has(car.ti+":"+rb.zi)) break;
   }
-  cars.push(car2);
+  cars.push(car);
 }
 
 // ====== Ввод ======
@@ -189,6 +193,13 @@ function drawCountdown(){ const n=Math.ceil(cdTimer), frac=cdTimer-(n-1);
   ctx.fillStyle='#ff7a00'; ctx.strokeStyle='#fff'; ctx.lineWidth=5;
   ctx.font='bold '+(FIELD_H*0.2)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.strokeText(n,0,0); ctx.fillText(n,0,0); ctx.restore(); ctx.globalAlpha=1; }
+function drawBanner(){ const pulse=0.5+0.5*Math.sin(performance.now()/120);
+  ctx.save(); ctx.translate(FIELD_W/2, FIELD_H*0.46); ctx.rotate(-0.06); ctx.globalAlpha=0.94;
+  ctx.fillStyle='#d11'; ctx.fillRect(-FIELD_W*0.62,-44,FIELD_W*1.24,88);
+  ctx.fillStyle='#ffd400'; ctx.strokeStyle='#000'; ctx.lineWidth=4;
+  ctx.font='bold '+(40+pulse*10)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.strokeText('ПЛОТИ ДЕНЬХИ!',0,0); ctx.fillText('ПЛОТИ ДЕНЬХИ!',0,0);
+  ctx.restore(); ctx.globalAlpha=1; }
 
 let last=performance.now();
 function frame(now){
@@ -196,16 +207,22 @@ function frame(now){
 
   for(const c of cars) advance(c,dt);
 
-  const L=computeLoop(car1); loopSet=L.set; loopClosed=L.closed;   // зелёный трек по первой машинке
-  if(phase==='solo' && loopClosed){ phase='wait'; waitT=PRE_WAIT; spawnLoop=new Set(loopSet); }
-  else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ phase='countdown'; cdTimer=3.0; } }
-  else if(phase==='countdown'){ cdTimer-=dt; if(cdTimer<=0){ phase='duo'; spawnCar2(); } }
-  if(phase==='duo'){                                               // столкновения -> авария
-    for(let i=0;i<cars.length;i++) for(let j=i+1;j<cars.length;j++){
-      const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;
-      const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.75;
-      if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){ crashCar(a); crashCar(b); }
-    }
+  // круги всех машинок: объединение для зелёной подсветки + флаги «замкнут»
+  loopSet=new Set(); loopSets=[]; closedFlags=[];
+  for(let i=0;i<cars.length;i++){ const L=computeLoop(cars[i]); loopSets[i]=L.set; closedFlags[i]=L.closed; if(L.closed) for(const k of L.set) loopSet.add(k); }
+  loopClosed=loopSet.size>0;
+  const armed=cars.length-1;                          // ждём круг у последней появившейся машинки
+  if(cars.length<MAX_CARS){
+    if(phase==='idle' && closedFlags[armed]){ phase='wait'; waitT=PRE_WAIT; spawnLoop=new Set(loopSets[armed]); }
+    else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ phase='countdown'; cdTimer=3.0; } }
+    else if(phase==='countdown'){ cdTimer-=dt; if(cdTimer<=0){ spawnNext(); phase='idle'; } }
+  }
+  bannerOn = cars.length>=MAX_CARS && closedFlags[MAX_CARS-1];   // 3-я в круге -> «ПЛОТИ ДЕНЬХИ!»
+  // столкновения -> авария
+  for(let i=0;i<cars.length;i++) for(let j=i+1;j<cars.length;j++){
+    const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;
+    const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.75;
+    if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){ crashCar(a); crashCar(b); }
   }
 
   ctx.setTransform(SCALE*dpr,0,0,SCALE*dpr,0,0);
@@ -219,6 +236,7 @@ function frame(now){
     else { drawCar(c); const {zi}=carRoad(c); for(let z=zi+1;z<3;z++) drawRoad(tiles[c.ti].roads[z], loopClosed&&loopSet.has(c.ti+":"+z)); }
   }
   if(phase==='countdown') drawCountdown();
+  if(bannerOn) drawBanner();
   if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle='#ff9500'; ctx.stroke(); }
 
   requestAnimationFrame(frame);

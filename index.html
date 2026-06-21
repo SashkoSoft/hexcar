@@ -105,7 +105,8 @@ function crashCar(car){ const p=carPose(car); car.crashPos=[p.x,p.y]; car.crashT
 function advance(car,dt){
   if(car.crashT>0){ car.crashT-=dt; if(car.crashT<=0){ car.dead=true; } return; } // после аварии машинка исчезает
   car.spd=Math.min(1, car.spd+dt/RECOVER);
-  car.momentum=Math.min(1, car.momentum+dt/(RAMP*car.weight)); // тяжёлая разгоняется дольше
+  const mcap = mode==='loops' ? 1 : 6;                          // в погоне скорость растёт всё время (потолок-страховка)
+  car.momentum=Math.min(mcap, car.momentum+dt/(RAMP*car.weight));
   const speed=(SLOW+(FAST-SLOW)*car.momentum)/car.weight*(car.speedK||1); // speedK: полиция быстрее
   let move=speed*car.spd*dt, guard=0;
   while(move>0 && guard++<40){
@@ -339,11 +340,14 @@ function frame(now){
   ctx.fillStyle=grassPat; ctx.fillRect(0,0,FIELD_W,FIELD_H);
   if(hover>=0){ hexPath(tiles[hover]); ctx.fillStyle='rgba(255,247,150,0.35)'; ctx.fill(); }
   drawFences();
-  // послойно: дороги уровня z, затем машинки на этом уровне -> мосты работают и все машинки видны
-  for(let z=0;z<3;z++){
-    for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti]; withSpin(t, ()=>drawRoad(t.roads[z], surf(ti+":"+z))); }
-    for(const c of cars){ if(c.crashT>0) continue; if(carRoad(c).zi===z) withSpin(tiles[c.ti], ()=>drawCar(c)); }
-  }
+  // база: все дороги (внутри плитки z-порядок -> мосты)
+  for(let z=0;z<3;z++) for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti]; withSpin(t, ()=>drawRoad(t.roads[z], surf(ti+":"+z))); }
+  // поверх — только плитки с машинками: дорога/машинка с интерливингом по уровням
+  // (мосты внутри плитки сохранены; соседние дороги не подрезают машинку на шве; две машинки не затирают друг друга)
+  const carTiles=new Set(); for(const c of cars) if(c.crashT<0) carTiles.add(c.ti);
+  for(const ti of carTiles){ const t=tiles[ti];
+    withSpin(t, ()=>{ for(let z=0;z<3;z++){ drawRoad(t.roads[z], surf(ti+":"+z));
+      for(const c of cars){ if(c.crashT<0 && c.ti===ti && carRoad(c).zi===z) drawCar(c); } } }); }
   for(const c of cars) if(c.crashT>0) drawCrash(c);
   drawPopups();
   if(hover>=0){ hexPath(tiles[hover]); ctx.lineWidth=3; ctx.strokeStyle='#ff9500'; ctx.stroke(); }

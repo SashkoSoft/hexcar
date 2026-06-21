@@ -236,7 +236,9 @@ const EDGE='rgba(255,255,255,0.9)';   // сплошные краевые лин�
 let SCALE=1, OX=0, OY=0;                       // масштаб и сдвиг (поле по центру окна)
 function resize(){ const W=innerWidth, H=innerHeight;
   cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
-  SCALE=Math.min(W/FIELD_W, H/FIELD_H); OX=(W-FIELD_W*SCALE)/2; OY=(H-FIELD_H*SCALE)/2; }
+  const innerW=(COLS-1)*DX, innerH=(ROWS-1)*DY;     // зона, гарантированно покрытая плитками (между центрами крайних)
+  SCALE=Math.max(W/innerW, H/innerH);               // заполнить окно плитками; травяные края поля уходят за экран
+  OX=(W-FIELD_W*SCALE)/2; OY=(H-FIELD_H*SCALE)/2; }
 addEventListener('resize',resize); resize();
 function mouseToUser(ev){ const r=cv.getBoundingClientRect(); return [ (ev.clientX-r.left-OX)/SCALE, (ev.clientY-r.top-OY)/SCALE ]; }
 let drag=-1, dragLastX=0, dragAccum=0; const DRAG_STEP=45;

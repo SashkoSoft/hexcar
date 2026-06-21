@@ -408,7 +408,8 @@ function frame(now){
   // тень слоя z -> дороги слоя z -> машинки на слое z.
   // тень слоя z ложится на нижние дороги/траву/машинки -> мост затеняет нижнюю дорогу и машинку под ним.
   for(let z=0;z<3;z++){
-    for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti]; withSpin(t, ()=>drawShadow(t.roads[z])); }
+    // тень слоя z — ОБРЕЗАНА шестиугольником своего тайла, чтобы не падать на соседний через шов
+    for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti]; withSpin(t, ()=>{ ctx.save(); hexPath(t); ctx.clip(); drawShadow(t.roads[z]); ctx.restore(); }); }
     for(let ti=0;ti<tiles.length;ti++){ const t=tiles[ti]; withSpin(t, ()=>drawRoad(t.roads[z], surf(ti+":"+z))); }
     for(const c of cars){ if(c.crashT<0 && carRoad(c).zi===z) withSpin(tiles[c.ti], ()=>drawCar(c)); }
   }

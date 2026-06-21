@@ -92,6 +92,8 @@ function pickColor(){ const used=new Set(cars.map(c=>c.color)); const av=PALETTE
 function makeCar(size,weight,shape){ return {ti:0,from:0,t:0,size,weight,shape,color:pickColor(),spd:1,momentum:0,crashT:-1,crashPos:[0,0],dead:false}; }
 function placeRandom(car){ car.ti=Math.floor(Math.random()*tiles.length); const rd=tiles[car.ti].roads[Math.floor(Math.random()*3)]; car.from=rd.edges[Math.floor(Math.random()*2)]; car.t=0; car.spd=0; car.momentum=0; }
 function carRoad(car){ return roadByEdge(tiles[car.ti], car.from); }
+// одна плитка + разные дороги = мост (разные уровни) -> не сталкиваются
+function sameLevel(a,b){ return a.ti!==b.ti || carRoad(a).zi===carRoad(b).zi; }
 function carPose(car){
   const {rd}=carRoad(car);
   const fromA=(car.from===rd.edges[0]);
@@ -304,7 +306,7 @@ function stepLoops(dt){
     if(phase==='idle' && closedFlags[armed]){ phase='wait'; waitT=PRE_WAIT; }
     else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ spawnNext(); phase='idle'; } }
     for(let i=0;i<cars.length && resetT<0;i++) for(let j=i+1;j<cars.length;j++){
-      const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;
+      const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0||!sameLevel(a,b)) continue;
       const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.75;
       if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){ crashCar(a); crashCar(b); resetT=RESET_DELAY; break; }
     }
@@ -314,7 +316,7 @@ function stepChase(dt){                  // 'chase' и 'bandit'
   roadColor=new Map(); loopSets=[]; closedFlags=[]; modeTime+=dt;
   for(const c of cars) advance(c,dt);
   for(let i=popups.length-1;i>=0;i--){ popups[i].life+=dt; if(popups[i].life>POP_DUR) popups.splice(i,1); }
-  if(cars.length>=2){ const a=cars[0], b=cars[1];
+  if(cars.length>=2 && sameLevel(cars[0],cars[1])){ const a=cars[0], b=cars[1];
     const pa=carPose(a), pb=carPose(b), rr=(a.size+b.size)*CAR*0.85;
     if((pa.x-pb.x)**2+(pa.y-pb.y)**2 < rr*rr){
       gameState='over';

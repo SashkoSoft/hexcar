@@ -111,19 +111,19 @@ function advance(car,dt){
 const car1=makeCar(1.0,1.0,0); cars.push(car1);
 (function(){ car1.ti=tiles.findIndex(t=>t.c===2&&t.r===2); if(car1.ti<0)car1.ti=0; car1.from=tiles[car1.ti].roads[1].edges[0]; })();
 
-// зелёный трек -> отсчёт -> вторая машинка
+// зелёный трек -> пауза 1с -> отсчёт 3·2·1 -> вторая машинка
 let loopSet=new Set(), loopClosed=false;
-let phase='solo';            // 'solo' | 'countdown' | 'duo'
-let cdTimer=0, spawnLoop=null;
+let phase='solo';            // 'solo' | 'wait' | 'countdown' | 'duo'
+let cdTimer=0, waitT=0, spawnLoop=null;
+const PRE_WAIT=1.0;          // пауза перед отсчётом после позеленения трассы
 function spawnCar2(){
   const car2=makeCar(1.45,1.6,1);   // крупнее и тяжелее -> заметно медленнее
-  let placed=false;
-  if(spawnLoop && spawnLoop.size){
-    const arr=[...spawnLoop], pk=arr[Math.floor(Math.random()*arr.length)].split(":");
-    const ti=+pk[0], zi=+pk[1], rd=tiles[ti].roads[zi];
-    car2.ti=ti; car2.from=rd.edges[1]; car2.t=0; car2.spd=0; car2.momentum=0; placed=true; // встречное движение
+  // поставить НЕ на подсвеченную (зелёную) трассу
+  for(let tries=0; tries<80; tries++){
+    placeRandom(car2);
+    const rb=roadByEdge(tiles[car2.ti], car2.from);
+    if(!spawnLoop || !spawnLoop.has(car2.ti+":"+rb.zi)) break;
   }
-  if(!placed) placeRandom(car2);
   cars.push(car2);
 }
 
@@ -197,8 +197,9 @@ function frame(now){
   for(const c of cars) advance(c,dt);
 
   const L=computeLoop(car1); loopSet=L.set; loopClosed=L.closed;   // зелёный трек по первой машинке
-  if(phase==='solo' && loopClosed){ phase='countdown'; cdTimer=3.0; spawnLoop=new Set(loopSet); }
-  if(phase==='countdown'){ cdTimer-=dt; if(cdTimer<=0){ phase='duo'; spawnCar2(); } }
+  if(phase==='solo' && loopClosed){ phase='wait'; waitT=PRE_WAIT; spawnLoop=new Set(loopSet); }
+  else if(phase==='wait'){ waitT-=dt; if(waitT<=0){ phase='countdown'; cdTimer=3.0; } }
+  else if(phase==='countdown'){ cdTimer-=dt; if(cdTimer<=0){ phase='duo'; spawnCar2(); } }
   if(phase==='duo'){                                               // столкновения -> авария
     for(let i=0;i<cars.length;i++) for(let j=i+1;j<cars.length;j++){
       const a=cars[i], b=cars[j]; if(a.crashT>0||b.crashT>0) continue;

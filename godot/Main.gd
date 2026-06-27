@@ -154,14 +154,14 @@ var PRESETS := {
 		"sun": 0.5,
 	},
 	"День": {
-		"ambient_color": Color(0.50, 0.59, 0.74), "ambient_energy": 0.40,
-		"moon_color": Color(1.0, 0.84, 0.58), "moon_energy": 1.8,
+		"ambient_color": Color(0.50, 0.59, 0.74), "ambient_energy": 0.30,
+		"moon_color": Color(1.0, 0.80, 0.50), "moon_energy": 1.9,
 		"glow_intensity": 0.25, "glow_bloom": 0.05, "glow_threshold": 1.1,
 		"sky_top": Color(0.20, 0.40, 0.72), "sky_horizon": Color(0.66, 0.78, 0.88), "star": 0.0,
 		"hl_energy": 5.0, "hl_range": 180.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.97, 0.85),
 		"highlight_emission": 0.7,
 		# тёплое солнце + чёткие тени (низкий ambient), AgX гасит пересветы
-		"tonemap": "agx", "exposure": 0.95, "contrast": 1.05, "saturation": 1.05, "brightness": 1.0,
+		"tonemap": "agx", "exposure": 0.95, "contrast": 1.15, "saturation": 1.08, "brightness": 1.0,
 		"sun": 1.0,
 	},
 }
@@ -1578,7 +1578,7 @@ func _build_environment() -> void:
 
 	# направленный свет (луна/солнце — цвет и яркость из пресета)
 	moon = DirectionalLight3D.new()
-	moon.rotation = Vector3(deg_to_rad(-22.0), deg_to_rad(35.0), 0.0)  # низко к горизонту — солнце видно, тени длинные
+	moon.rotation = Vector3(deg_to_rad(-15.0), deg_to_rad(35.0), 0.0)  # ниже к горизонту — солнце видно, тени длиннее
 	moon.shadow_enabled = true
 	moon.directional_shadow_max_distance = 3000.0
 	moon.directional_shadow_blend_splits = true
@@ -2022,8 +2022,6 @@ func _update_ui() -> void:
 		else:
 			hud_mode.text = "Догони бандита!" if mode == "chase" else "Уходи от полиции!"
 			hud_time.text = "Время: %.1f c" % modeTime
-
-
 
 
 

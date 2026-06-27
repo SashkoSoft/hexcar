@@ -89,6 +89,7 @@ class Car:
 	var loopScore: int = 0
 	var half_h: float = 4.0
 	var node: Node3D
+	var lights: Array = []   # SpotLight3D фар (для смены пресета на лету)
 
 # ======================================================================
 # Состояние
@@ -122,6 +123,42 @@ var POP_DUR := 1.1
 var hover := -1
 var drag_tile := -1
 var drag_accum := 0.0
+
+# ---- Пресеты оформления (свет/фары/свечение/небо) ----
+# текущие настройки; применяются через _apply_look(), сохраняются/читаются с диска
+var look := {}
+var env: Environment
+var moon: DirectionalLight3D
+var sky_mat: ShaderMaterial
+const LOOK_PATH := "user://look.cfg"
+var PRESETS := {
+	"Ночь": {
+		"ambient_color": Color(0.118, 0.149, 0.259), "ambient_energy": 0.28,
+		"moon_color": Color(0.525, 0.608, 0.871), "moon_energy": 0.25,
+		"glow_intensity": 1.1, "glow_bloom": 0.25, "glow_threshold": 0.8,
+		"sky_top": Color(0.003, 0.005, 0.016), "sky_horizon": Color(0.018, 0.026, 0.058), "star": 1.0,
+		"hl_energy": 38.0, "hl_range": 420.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.95, 0.78),
+		"highlight_emission": 1.8,
+	},
+	"Сумерки": {
+		"ambient_color": Color(0.32, 0.30, 0.42), "ambient_energy": 0.7,
+		"moon_color": Color(0.95, 0.72, 0.55), "moon_energy": 0.7,
+		"glow_intensity": 0.9, "glow_bloom": 0.15, "glow_threshold": 0.9,
+		"sky_top": Color(0.10, 0.10, 0.22), "sky_horizon": Color(0.55, 0.35, 0.30), "star": 0.35,
+		"hl_energy": 16.0, "hl_range": 300.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.96, 0.82),
+		"highlight_emission": 1.2,
+	},
+	"День": {
+		"ambient_color": Color(0.70, 0.78, 0.92), "ambient_energy": 1.0,
+		"moon_color": Color(1.0, 0.96, 0.85), "moon_energy": 1.2,
+		"glow_intensity": 0.5, "glow_bloom": 0.05, "glow_threshold": 1.0,
+		"sky_top": Color(0.22, 0.42, 0.75), "sky_horizon": Color(0.72, 0.84, 0.93), "star": 0.0,
+		"hl_energy": 5.0, "hl_range": 180.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.97, 0.85),
+		"highlight_emission": 0.7,
+	},
+}
+var flash_label: Label
+var flash_t := 0.0
 
 # камера (орбитальная, со сглаживанием как в Dorfromantik)
 var cam_pivot: Vector3                  # текущая (сглаженная) точка фокуса
@@ -178,6 +215,7 @@ var TRUNK_COL := Color8(0x6b, 0x47, 0x2a)
 # ======================================================================
 func _ready() -> void:
 	randomize()
+	look = PRESETS["Ночь"].duplicate(true)   # пресет по умолчанию
 	_build_base_roads()
 	_build_bridges()
 	_build_environment()
@@ -191,6 +229,7 @@ func _ready() -> void:
 	_build_hover_marker()
 	_build_ui()
 	_show_menu()
+	load_look()   # если есть сохранённые настройки на диске — применить их
 
 # ----------------------------------------------------------------------
 # Геометрия (порт)
@@ -700,7 +739,8 @@ func step_chase(dt: float) -> void:
 
 # подсветка дорог замкнутых кругов цветом машинки (тонируем асфальт, surface 0)
 func _road_tint_mat(col: Color) -> StandardMaterial3D:
-	var key := "roadtint|" + str(col)
+	var emit: float = look.get("highlight_emission", 1.8)
+	var key := "roadtint|" + str(col) + "|" + str(emit)
 	if mat_cache.has(key):
 		return mat_cache[key]
 	var m := StandardMaterial3D.new()
@@ -709,7 +749,7 @@ func _road_tint_mat(col: Color) -> StandardMaterial3D:
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.emission_enabled = true
 	m.emission = col
-	m.emission_energy_multiplier = 1.8
+	m.emission_energy_multiplier = emit
 	mat_cache[key] = m
 	return m
 
@@ -754,6 +794,12 @@ func _process(dt: float) -> void:
 	_update_hover(dt)
 	_update_popups(dt)
 	_update_ui()
+	if flash_t > 0.0:
+		flash_t -= dt
+		flash_label.visible = true
+		flash_label.modulate.a = clamp(flash_t, 0.0, 1.0)
+	elif flash_label.visible:
+		flash_label.visible = false
 	_camera_keys(dt)
 	_smooth_camera(dt)
 	update_camera()
@@ -829,11 +875,23 @@ func _unhandled_input(event: InputEvent) -> void:
 			tgt_yaw += event.relative.x * 0.006
 			tgt_pitch = clamp(tgt_pitch - event.relative.y * 0.004, CAM_PITCH_MIN, CAM_PITCH_MAX)
 	elif event is InputEventKey and event.pressed and not event.echo:
-		if gameState == "play" and hover >= 0:
-			if event.keycode == KEY_LEFT or event.keycode == KEY_A:
-				rotate_tile(hover, -1)
-			elif event.keycode == KEY_RIGHT or event.keycode == KEY_S:
-				rotate_tile(hover, 1)
+		match event.keycode:
+			KEY_1:
+				apply_preset("Ночь")
+			KEY_2:
+				apply_preset("Сумерки")
+			KEY_3:
+				apply_preset("День")
+			KEY_F5:
+				save_look()
+			KEY_F9:
+				load_look()
+			_:
+				if gameState == "play" and hover >= 0:
+					if event.keycode == KEY_LEFT or event.keycode == KEY_A:
+						rotate_tile(hover, -1)
+					elif event.keycode == KEY_RIGHT or event.keycode == KEY_S:
+						rotate_tile(hover, 1)
 
 # ======================================================================
 # Материалы / общие меши
@@ -1348,15 +1406,16 @@ func _build_car_node(c: Car) -> void:
 	var tail_mat := get_mat(Color(1.0, 0.12, 0.06), 0.3, 3.0)
 	for s in [-1.0, 1.0]:
 		var spot := SpotLight3D.new()
-		spot.light_color = Color(1.0, 0.95, 0.78)
-		spot.light_energy = 38.0
-		spot.spot_range = 420.0
-		spot.spot_angle = 30.0
+		spot.light_color = look.get("hl_color", Color(1.0, 0.95, 0.78))
+		spot.light_energy = look.get("hl_energy", 38.0)
+		spot.spot_range = look.get("hl_range", 420.0)
+		spot.spot_angle = look.get("hl_angle", 30.0)
 		spot.spot_angle_attenuation = 0.7
 		spot.spot_attenuation = 0.6
 		spot.shadow_enabled = false
 		spot.transform = Transform3D(Basis(lx, ly, lz), Vector3(length * 0.5, hl_y, s * width * 0.30))
 		root.add_child(spot)
+		c.lights.append(spot)
 		var lamp := MeshInstance3D.new()
 		var lampm := BoxMesh.new()
 		lampm.size = Vector3(width * 0.10, height * 0.20, width * 0.18)
@@ -1439,6 +1498,10 @@ func _clear_popups() -> void:
 var _NIGHT_SKY_SHADER := """
 shader_type sky;
 
+uniform vec3 u_sky_top = vec3(0.003, 0.005, 0.016);
+uniform vec3 u_sky_horizon = vec3(0.018, 0.026, 0.058);
+uniform float u_star = 1.0;
+
 float hash(vec3 p) {
 	return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
 }
@@ -1458,12 +1521,12 @@ float star_layer(vec3 d, float scale, float thr) {
 void sky() {
 	vec3 d = normalize(EYEDIR);
 	float up = clamp(d.y, 0.0, 1.0);
-	vec3 base = mix(vec3(0.018, 0.026, 0.058), vec3(0.003, 0.005, 0.016), up);
+	vec3 base = mix(u_sky_horizon, u_sky_top, up);
 	float star = 0.0;
-	if (d.y > 0.01) {
+	if (u_star > 0.001 && d.y > 0.01) {
 		star += star_layer(d, 200.0, 0.983);
 		star += star_layer(d, 340.0, 0.989) * 0.8;
-		star *= smoothstep(0.0, 0.10, d.y);
+		star *= smoothstep(0.0, 0.10, d.y) * u_star;
 	}
 	vec3 sc = mix(vec3(0.8, 0.86, 1.0), vec3(1.0, 0.94, 0.78), hash(floor(d * 97.0)));
 	COLOR = base + sc * star * 3.0;
@@ -1472,35 +1535,27 @@ void sky() {
 
 func _build_environment() -> void:
 	var we := WorldEnvironment.new()
-	var env := Environment.new()
+	env = Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sky_shader := Shader.new()
 	sky_shader.code = _NIGHT_SKY_SHADER
-	var sky_mat := ShaderMaterial.new()
+	sky_mat = ShaderMaterial.new()
 	sky_mat.shader = sky_shader
 	sky.sky_material = sky_mat
 	env.sky = sky
-	# глубокая ночь: тусклый холодный ambient
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color8(0x1e, 0x26, 0x42)
-	env.ambient_light_energy = 0.28
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	# свечение для фар/подсветки кругов/звёзд
 	env.glow_enabled = true
-	env.glow_intensity = 1.1
-	env.glow_bloom = 0.25
-	env.glow_hdr_threshold = 0.8
+	# конкретные значения света/неба/свечения берутся из пресета (_apply_look)
 	# объёмный туман выключен: при дальней камере он затягивал всё поле в дымку
 	env.volumetric_fog_enabled = false
 	we.environment = env
 	add_child(we)
 
-	# луна (холодный направленный свет)
-	var moon := DirectionalLight3D.new()
+	# направленный свет (луна/солнце — цвет и яркость из пресета)
+	moon = DirectionalLight3D.new()
 	moon.rotation = Vector3(deg_to_rad(-55.0), deg_to_rad(35.0), 0.0)
-	moon.light_color = Color8(0x86, 0x9b, 0xde)
-	moon.light_energy = 0.25
 	moon.shadow_enabled = true
 	moon.directional_shadow_max_distance = 3000.0
 	add_child(moon)
@@ -1513,6 +1568,73 @@ func _build_environment() -> void:
 	grass.material_override = _make_grass_material()
 	grass.position = Vector3(FIELD_W * 0.5, -0.5, FIELD_H * 0.5)
 	add_child(grass)
+
+	_apply_look()   # применить текущий пресет к окружению
+
+func _v3(c: Color) -> Vector3:
+	return Vector3(c.r, c.g, c.b)
+
+# применить текущий набор настроек look ко всей сцене
+func _apply_look() -> void:
+	if look.is_empty():
+		return
+	if env:
+		env.ambient_light_color = look["ambient_color"]
+		env.ambient_light_energy = look["ambient_energy"]
+		env.glow_intensity = look["glow_intensity"]
+		env.glow_bloom = look["glow_bloom"]
+		env.glow_hdr_threshold = look["glow_threshold"]
+	if moon:
+		moon.light_color = look["moon_color"]
+		moon.light_energy = look["moon_energy"]
+	if sky_mat:
+		sky_mat.set_shader_parameter("u_sky_top", _v3(look["sky_top"]))
+		sky_mat.set_shader_parameter("u_sky_horizon", _v3(look["sky_horizon"]))
+		sky_mat.set_shader_parameter("u_star", look["star"])
+	# фары существующих машинок
+	for c in cars:
+		for sp in c.lights:
+			sp.light_energy = look["hl_energy"]
+			sp.spot_range = look["hl_range"]
+			sp.spot_angle = look["hl_angle"]
+			sp.light_color = look["hl_color"]
+	# подсветка кругов: сбросить старые материалы, чтобы пересоздались с новым свечением
+	for k in colored_keys.keys():
+		var p: PackedStringArray = k.split(":")
+		tiles[int(p[0])].roads[int(p[1])].set_surface_override_material(0, null)
+	colored_keys = {}
+	for mk in mat_cache.keys():
+		if str(mk).begins_with("roadtint|"):
+			mat_cache.erase(mk)
+
+func apply_preset(name: String) -> void:
+	if PRESETS.has(name):
+		look = PRESETS[name].duplicate(true)
+		_apply_look()
+		_flash("Пресет: " + name)
+
+func save_look() -> void:
+	var c := ConfigFile.new()
+	for k in look.keys():
+		c.set_value("look", k, look[k])
+	var err := c.save(LOOK_PATH)
+	_flash("Сохранено" if err == OK else "Ошибка сохранения")
+
+func load_look() -> bool:
+	var c := ConfigFile.new()
+	if c.load(LOOK_PATH) != OK:
+		return false
+	for k in c.get_section_keys("look"):
+		look[k] = c.get_value("look", k)
+	_apply_look()
+	_flash("Загружено")
+	return true
+
+func _flash(s: String) -> void:
+	if flash_label == null:
+		return
+	flash_label.text = s
+	flash_t = 1.8
 
 func _build_camera() -> void:
 	cam = Camera3D.new()
@@ -1643,6 +1765,20 @@ func _build_ui() -> void:
 	crash_label.text = "АВАРИЯ!"
 	crash_label.visible = false
 
+	# плашка-уведомление (пресет применён/сохранён) — вверху по центру
+	flash_label = Label.new()
+	flash_label.add_theme_font_size_override("font_size", 24)
+	flash_label.add_theme_color_override("font_color", Color(1, 1, 1))
+	flash_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	flash_label.add_theme_constant_override("outline_size", 5)
+	flash_label.anchor_left = 0.0
+	flash_label.anchor_right = 1.0
+	flash_label.anchor_top = 0.06
+	flash_label.anchor_bottom = 0.06
+	flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	flash_label.visible = false
+	ui.add_child(flash_label)
+
 	# --- Меню ---
 	menu_panel = Control.new()
 	menu_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1727,7 +1863,7 @@ func _build_ui() -> void:
 
 	# --- подсказка по камере (всегда видна) ---
 	var cam_hint := Label.new()
-	cam_hint.text = "Плитка: ЛКМ — повернуть (Shift — назад), ←/→ или A/S      Камера: ПКМ — тащить · СКМ — вращать · колесо — зум · Q/E/R/F/Z/X"
+	cam_hint.text = "Плитка: ЛКМ — повернуть (Shift — назад)   Камера: ПКМ/СКМ/колесо, Q/E/R/F/Z/X   Свет: 1 Ночь · 2 Сумерки · 3 День · F5 сохранить · F9 загрузить"
 	cam_hint.add_theme_font_size_override("font_size", 14)
 	cam_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
 	cam_hint.add_theme_color_override("font_outline_color", Color(0, 0, 0))
@@ -1779,6 +1915,7 @@ func _update_ui() -> void:
 		else:
 			hud_mode.text = "Догони бандита!" if mode == "chase" else "Уходи от полиции!"
 			hud_time.text = "Время: %.1f c" % modeTime
+
 
 
 

@@ -141,6 +141,7 @@ var PRESETS := {
 		"highlight_emission": 1.8,
 		# стиль рендера
 		"tonemap": "filmic", "exposure": 1.0, "contrast": 1.05, "saturation": 1.12, "brightness": 1.0,
+		"sun": 0.0,
 	},
 	"Сумерки": {
 		"ambient_color": Color(0.32, 0.30, 0.42), "ambient_energy": 0.7,
@@ -150,16 +151,18 @@ var PRESETS := {
 		"hl_energy": 16.0, "hl_range": 300.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.96, 0.82),
 		"highlight_emission": 1.2,
 		"tonemap": "agx", "exposure": 1.0, "contrast": 1.02, "saturation": 1.08, "brightness": 1.0,
+		"sun": 0.5,
 	},
 	"День": {
-		"ambient_color": Color(0.60, 0.67, 0.80), "ambient_energy": 0.55,
-		"moon_color": Color(1.0, 0.95, 0.84), "moon_energy": 0.85,
-		"glow_intensity": 0.2, "glow_bloom": 0.0, "glow_threshold": 1.3,
-		"sky_top": Color(0.20, 0.38, 0.68), "sky_horizon": Color(0.62, 0.74, 0.86), "star": 0.0,
+		"ambient_color": Color(0.50, 0.59, 0.74), "ambient_energy": 0.40,
+		"moon_color": Color(1.0, 0.84, 0.58), "moon_energy": 1.8,
+		"glow_intensity": 0.25, "glow_bloom": 0.05, "glow_threshold": 1.1,
+		"sky_top": Color(0.20, 0.40, 0.72), "sky_horizon": Color(0.66, 0.78, 0.88), "star": 0.0,
 		"hl_energy": 5.0, "hl_range": 180.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.97, 0.85),
 		"highlight_emission": 0.7,
-		# AgX мягко гасит пересветы — день без «пережаренности»
-		"tonemap": "agx", "exposure": 0.9, "contrast": 1.02, "saturation": 1.0, "brightness": 1.0,
+		# тёплое солнце + чёткие тени (низкий ambient), AgX гасит пересветы
+		"tonemap": "agx", "exposure": 0.95, "contrast": 1.05, "saturation": 1.05, "brightness": 1.0,
+		"sun": 1.0,
 	},
 }
 var flash_label: Label
@@ -1510,6 +1513,9 @@ shader_type sky;
 uniform vec3 u_sky_top = vec3(0.003, 0.005, 0.016);
 uniform vec3 u_sky_horizon = vec3(0.018, 0.026, 0.058);
 uniform float u_star = 1.0;
+uniform vec3 u_sun_dir = vec3(0.4, 0.6, 0.5);
+uniform vec3 u_sun_color = vec3(1.0, 0.85, 0.6);
+uniform float u_sun = 0.0;
 
 float hash(vec3 p) {
 	return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
@@ -1539,6 +1545,14 @@ void sky() {
 	}
 	vec3 sc = mix(vec3(0.8, 0.86, 1.0), vec3(1.0, 0.94, 0.78), hash(floor(d * 97.0)));
 	COLOR = base + sc * star * 3.0;
+	// солнце: яркий тёплый диск + ореол + лёгкое потепление неба у солнца
+	if (u_sun > 0.001) {
+		float c = dot(d, normalize(u_sun_dir));
+		float disk = smoothstep(0.9965, 0.9990, c);
+		float halo = pow(max(c, 0.0), 48.0) * 0.6;
+		float warm = pow(max(c, 0.0), 6.0) * 0.18;
+		COLOR += u_sun_color * (disk * 8.0 + halo + warm) * u_sun;
+	}
 }
 """
 
@@ -1564,9 +1578,10 @@ func _build_environment() -> void:
 
 	# направленный свет (луна/солнце — цвет и яркость из пресета)
 	moon = DirectionalLight3D.new()
-	moon.rotation = Vector3(deg_to_rad(-55.0), deg_to_rad(35.0), 0.0)
+	moon.rotation = Vector3(deg_to_rad(-22.0), deg_to_rad(35.0), 0.0)  # низко к горизонту — солнце видно, тени длинные
 	moon.shadow_enabled = true
 	moon.directional_shadow_max_distance = 3000.0
+	moon.directional_shadow_blend_splits = true
 	add_child(moon)
 
 	# трава
@@ -1614,6 +1629,11 @@ func _apply_look() -> void:
 		sky_mat.set_shader_parameter("u_sky_top", _v3(look["sky_top"]))
 		sky_mat.set_shader_parameter("u_sky_horizon", _v3(look["sky_horizon"]))
 		sky_mat.set_shader_parameter("u_star", look["star"])
+		sky_mat.set_shader_parameter("u_sun", look.get("sun", 0.0))
+		if moon:
+			# солнце в небе — там, откуда падает свет (ось +Z направленного света)
+			sky_mat.set_shader_parameter("u_sun_dir", moon.global_transform.basis.z)
+		sky_mat.set_shader_parameter("u_sun_color", _v3(look["moon_color"]))
 	# фары существующих машинок
 	for c in cars:
 		for sp in c.lights:
@@ -2002,6 +2022,7 @@ func _update_ui() -> void:
 		else:
 			hud_mode.text = "Догони бандита!" if mode == "chase" else "Уходи от полиции!"
 			hud_time.text = "Время: %.1f c" % modeTime
+
 
 
 

@@ -124,6 +124,18 @@ var hover := -1
 var drag_tile := -1
 var drag_accum := 0.0
 
+# бот: автоповорот плиток ради самых больших петель (хилл-климбинг + пертурбации)
+var bot_active := false
+var bot_timer := 0.0
+var BOT_INTERVAL := 0.08          # пауза между ходами бота (с)
+var bot_best_val := -1            # лучший достигнутый счёт (Σ плиток² по петлям)
+var bot_best_max := 0             # размер самой большой петли в лучшей конфигурации
+var bot_best_m: Array = []        # снимок ориентаций лучшей конфигурации
+var bot_no_improve := 0           # локальных оптимумов подряд без нового рекорда
+var bot_moves := 0                # всего ходов бота за запуск
+var bot_max_loop := 0             # текущая самая большая петля (для подписи)
+var bot_btn: Button
+
 # ---- Пресеты оформления (свет/фары/свечение/небо) ----
 # текущие настройки; применяются через _apply_look(), сохраняются/читаются с диска
 var look := {}
@@ -543,6 +555,143 @@ func compute_loop(car: Car) -> Dictionary:
 			return {"set": set, "closed": true}
 	return {"set": set, "closed": false}
 
+# ======================================================================
+# Бот: крутит плитки, чтобы получились самые большие петли
+# ======================================================================
+# Декомпозиция всех дорог поля на петли. Полудуга (ti,e) → преемник (сосед, (выход+3)%6);
+# это перестановка, её циклы — петли. score = Σ (число плиток в петле)² по замкнутым.
+func _loop_score() -> Dictionary:
+	var visited := {}
+	var total := 0
+	var mx := 0
+	for ti in range(tiles.size()):
+		for e in range(6):
+			var sk := str(ti) + ":" + str(e)
+			if visited.has(sk):
+				continue
+			var cti := ti
+			var ce := e
+			var tile_set := {}
+			var closed := false
+			var guard := 0
+			while guard < 1000:
+				guard += 1
+				var hk := str(cti) + ":" + str(ce)
+				if visited.has(hk):
+					closed = (hk == sk)   # вернулись в старт → замкнуто
+					break
+				visited[hk] = true
+				var rb := road_by_edge(tiles[cti].m, ce)
+				if rb.is_empty():
+					break
+				tile_set[cti] = true
+				var toEdge: int = rb.e1 if ce == rb.e0 else rb.e0
+				var nb := neighbor(cti, toEdge)
+				if nb < 0:
+					break                 # упёрлись в край — петля разомкнута
+				cti = nb
+				ce = (toEdge + 3) % 6
+			if closed:
+				var n: int = tile_set.size()
+				total += n * n
+				if n > mx:
+					mx = n
+	return {"score": total, "max": mx}
+
+# лучший одиночный поворот: какую плитку и в какую ориентацию, чтобы счёт вырос максимально
+func _bot_best_move() -> Dictionary:
+	var base: int = _loop_score().score
+	var best_gain := 0
+	var best_ti := -1
+	var best_m := 0
+	for ti in range(tiles.size()):
+		var orig: int = tiles[ti].m
+		for mm in range(6):
+			if mm == orig:
+				continue
+			tiles[ti].m = mm
+			var sc: int = _loop_score().score
+			if sc - base > best_gain:
+				best_gain = sc - base
+				best_ti = ti
+				best_m = mm
+		tiles[ti].m = orig
+	return {"ti": best_ti, "m": best_m, "gain": best_gain}
+
+# повернуть плитку до нужной ориентации кратчайшим путём (через rotate_tile — с анимацией)
+func _set_tile_m(ti: int, target_m: int) -> void:
+	var cur: int = tiles[ti].m
+	var delta: int = (target_m - cur + 6) % 6
+	if delta == 0:
+		return
+	var dir := 1 if delta <= 3 else -1
+	var steps: int = delta if delta <= 3 else 6 - delta
+	for s in range(steps):
+		rotate_tile(ti, dir)
+
+func _snapshot_m() -> Array:
+	var a := []
+	for t in tiles:
+		a.append(t.m)
+	return a
+
+func _restore_m(a: Array) -> void:
+	for i in range(min(a.size(), tiles.size())):
+		_set_tile_m(i, a[i])
+
+func toggle_bot() -> void:
+	if not (gameState == "play" and mode == "loops"):
+		return
+	bot_active = not bot_active
+	if bot_active:
+		bot_best_val = -1
+		bot_best_max = 0
+		bot_no_improve = 0
+		bot_moves = 0
+		bot_timer = 0.0
+		_flash("Бот: ищет самые большие петли…")
+	else:
+		_flash("Бот: выкл")
+	_update_bot_btn()
+
+func _update_bot_btn() -> void:
+	if bot_btn == null:
+		return
+	if bot_active:
+		bot_btn.text = "Бот: петля %d ⟳" % bot_max_loop
+		bot_btn.modulate = Color(1, 0.85, 0.35)
+	else:
+		bot_btn.text = "Бот: петли (B)"
+		bot_btn.modulate = Color(1, 1, 1)
+
+func _bot_tick(dt: float) -> void:
+	bot_timer -= dt
+	if bot_timer > 0.0:
+		return
+	bot_timer = BOT_INTERVAL
+	var cur := _loop_score()
+	bot_max_loop = cur.max
+	if cur.score > bot_best_val:        # новый рекорд — запоминаем конфигурацию
+		bot_best_val = cur.score
+		bot_best_max = cur.max
+		bot_best_m = _snapshot_m()
+		bot_no_improve = 0
+	var mv := _bot_best_move()
+	bot_moves += 1
+	if mv.gain > 0:
+		_set_tile_m(mv.ti, mv.m)        # жадный шаг вверх
+	else:
+		# локальный оптимум: пертурбация, чтобы выбраться и поискать петлю крупнее
+		bot_no_improve += 1
+		if bot_no_improve > 6 or bot_moves > 800:
+			_restore_m(bot_best_m)      # вернуть лучшее найденное и остановиться
+			bot_active = false
+			_flash("Бот: готово · самая большая петля — %d плиток" % bot_best_max)
+		else:
+			for k in range(3):
+				rotate_tile(randi() % tiles.size(), 1 if randi() % 2 == 0 else -1)
+	_update_bot_btn()
+
 func advance(car: Car, dt: float) -> void:
 	if car.crashT > 0.0:
 		car.crashT -= dt
@@ -662,6 +811,8 @@ func start_mode(m: String) -> void:
 	mode = m
 	gameState = "play"
 	modeTime = 0.0
+	bot_active = false
+	_update_bot_btn()
 	_clear_cars()
 	_clear_popups()
 	phase = "idle"
@@ -716,7 +867,7 @@ func step_loops(dt: float) -> void:
 		c.loopScore = cur
 	if score > best:
 		best = score
-	if resetT < 0.0:
+	if resetT < 0.0 and not bot_active:   # пока бот перестраивает поле — без спавна/аварий/сброса
 		var armed := cars.size() - 1
 		if phase == "idle" and armed >= 0 and closed_flags[armed]:
 			phase = "wait"
@@ -803,6 +954,8 @@ func _process(dt: float) -> void:
 
 	if gameState == "play":
 		if mode == "loops":
+			if bot_active:
+				_bot_tick(dt)
 			step_loops(dt)
 		else:
 			step_chase(dt)
@@ -914,6 +1067,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				save_look()
 			KEY_F9:
 				load_look()
+			KEY_B:
+				toggle_bot()
 			_:
 				if gameState == "play" and hover >= 0:
 					if event.keycode == KEY_LEFT or event.keycode == KEY_A:
@@ -2041,6 +2196,15 @@ func _build_ui() -> void:
 	crash_label.text = "АВАРИЯ!"
 	crash_label.visible = false
 
+	# кнопка бота (режим Кольца) — крутит плитки ради самых больших петель
+	bot_btn = Button.new()
+	bot_btn.text = "Бот: петли (B)"
+	bot_btn.position = Vector2(16, 92)
+	bot_btn.add_theme_font_size_override("font_size", 18)
+	bot_btn.pressed.connect(toggle_bot)
+	bot_btn.visible = false
+	ui.add_child(bot_btn)
+
 	# плашка-уведомление (пресет применён/сохранён) — вверху по центру
 	flash_label = Label.new()
 	flash_label.add_theme_font_size_override("font_size", 24)
@@ -2260,6 +2424,8 @@ func _update_ui() -> void:
 	hud_mode.visible = playing and not loops
 	hud_time.visible = playing and not loops
 	crash_label.visible = playing and loops and resetT > 0.0
+	if bot_btn:
+		bot_btn.visible = playing and loops
 	if playing:
 		if loops:
 			hud_score.text = "Очки: " + str(score)

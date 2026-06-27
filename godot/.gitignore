@@ -1,0 +1,7 @@
+# Godot 4 кэш импорта и временные файлы
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+*.translation
+_shot*.png

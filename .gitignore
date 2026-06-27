@@ -1,6 +1,13 @@
 # рабочие референсы/скриншоты и временные файлы
 *.jpg
 .picasa.ini
+# исполняемые файлы редактора Godot (большие бинарники, не коммитим)
+Godot_v4.7-stable_win64.exe
+Godot_v4.7-stable_win64_console.exe
+god/
+godot/.godot/
+godot/_shot*.png
+
 # промежуточные артефакты генерации плиток
 hex_tile_a*.png
 hex_tile_a*.svg

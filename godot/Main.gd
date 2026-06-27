@@ -191,7 +191,7 @@ const CANNY_CFG := {
 	4: {"low": 0.14, "high": 0.36, "blur": 1.5, "line": 0.85, "paper": 0.0, "mult": 0.0, "toon": 0.0},  # расширенный — больше линий
 	5: {"low": 0.09, "high": 0.26, "blur": 1.2, "line": 0.90, "paper": 0.0, "mult": 0.0, "toon": 0.0},  # широкий — максимум деталей
 	6: {"low": 0.10, "high": 0.28, "blur": 1.3, "line": 0.95, "paper": 0.0, "mult": 1.0, "toon": 0.0},  # контур ×цветной рендер
-	8: {"low": 0.10, "high": 0.28, "blur": 1.3, "line": 0.95, "paper": 0.0, "mult": 1.0, "toon": 1.0},  # контур ×цвет ×тун-градиент
+	8: {"low": 0.10, "high": 0.28, "blur": 1.3, "line": 0.95, "paper": 0.0, "mult": 1.0, "toon": 1.0, "thick": 2.5},  # контур ×цвет ×тун-градиент + жирный контур
 }
 var fx_layer: CanvasLayer
 var fx_rect: ColorRect
@@ -1689,6 +1689,7 @@ uniform float u_canny_line = 0.85;   // насыщенность линии (0..
 uniform float u_canny_paper = 0.015; // зерно бумаги (0 — чистый фон)
 uniform float u_canny_mult = 0.0;    // 0 — линии на бумаге, 1 — линии ×цветной рендер (multiply)
 uniform float u_canny_toon = 0.0;    // 1 — базовый цвет проходит через тун-градиент перед наложением
+uniform float u_canny_thick = 0.0;   // радиус (px) жирного тун-контура поверх тонких линий (0 — выкл)
 
 float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
 float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -1748,6 +1749,22 @@ vec2 sobel_grad(vec2 uv, vec2 px){
 float gmag(vec2 uv, vec2 px){ return length(sobel_grad(uv, px)); }
 // магнитуда по сглаженной яркости — для проверки соседей (NMS/гистерезис), тот же денойз
 float gmag_fast(vec2 uv, vec2 px){ return length(sobel_grad(uv, px)); }
+
+// жирный контур: Собель с широким шагом w (px) — отклик шире → толстая линия силуэта
+float thick_edge(vec2 uv, vec2 px, float w){
+	vec2 o = px * w;
+	float tl = luma(samp(uv + vec2(-o.x, -o.y)));
+	float t  = luma(samp(uv + vec2( 0.0, -o.y)));
+	float tr = luma(samp(uv + vec2( o.x, -o.y)));
+	float l  = luma(samp(uv + vec2(-o.x,  0.0)));
+	float r  = luma(samp(uv + vec2( o.x,  0.0)));
+	float bl = luma(samp(uv + vec2(-o.x,  o.y)));
+	float b  = luma(samp(uv + vec2( 0.0,  o.y)));
+	float br = luma(samp(uv + vec2( o.x,  o.y)));
+	float gx = -tl - 2.0 * l - bl + tr + 2.0 * r + br;
+	float gy = -tl - 2.0 * t - tr + bl + 2.0 * b + br;
+	return sqrt(gx * gx + gy * gy);
+}
 
 // Canny с антиалиасингом: пороги через smoothstep дают дробное покрытие на краю линии
 float canny_ink(vec2 uv, vec2 px){
@@ -1836,6 +1853,12 @@ void fragment(){
 	} else if (u_style >= 4){
 		// КАРАНДАШ / CANNY (антиалиас) — контур; mult → ×цвет, toon → ч/б тун multiply на цвет
 		float ink = canny_ink(uv, px) * u_canny_line;
+		if (u_canny_thick > 0.01){
+			// жирный тун-контур силуэтов поверх тонких линий
+			float te = thick_edge(uv, px, u_canny_thick);
+			float thick = smoothstep(u_canny_high * 0.8, u_canny_high * 1.5, te);
+			ink = max(ink, thick);
+		}
 		// ч/б тун как multiply-слой: множитель вокруг 1.0 (ступени затемняют/осветляют, без общего провала)
 		vec3 base = (u_canny_toon > 0.5) ? clamp(col * (0.65 + 0.7 * toon_lum(col)), 0.0, 1.0) : col;
 		float paper = 1.0 - u_canny_paper + u_canny_paper * vnoise(uv * res * 0.04);
@@ -1876,6 +1899,7 @@ func set_style(idx: int) -> void:
 			fx_mat.set_shader_parameter("u_canny_paper", cfg["paper"])
 			fx_mat.set_shader_parameter("u_canny_mult", cfg.get("mult", 0.0))
 			fx_mat.set_shader_parameter("u_canny_toon", cfg.get("toon", 0.0))
+			fx_mat.set_shader_parameter("u_canny_thick", cfg.get("thick", 0.0))
 	if fx_rect:
 		fx_rect.visible = current_style != 0
 	_update_style_fx_buttons()
@@ -2433,7 +2457,6 @@ func _update_ui() -> void:
 		else:
 			hud_mode.text = "Догони бандита!" if mode == "chase" else "Уходи от полиции!"
 			hud_time.text = "Время: %.1f c" % modeTime
-
 
 
 

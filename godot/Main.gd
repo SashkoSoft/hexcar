@@ -164,6 +164,9 @@ var PRESETS := {
 }
 var flash_label: Label
 var flash_t := 0.0
+var current_preset := ""        # имя активного пресета (для подсветки кнопки)
+var style_panel: Control
+var style_buttons := {}         # имя -> Button
 
 # камера (орбитальная, со сглаживанием как в Dorfromantik)
 var cam_pivot: Vector3                  # текущая (сглаженная) точка фокуса
@@ -221,6 +224,7 @@ var TRUNK_COL := Color8(0x6b, 0x47, 0x2a)
 func _ready() -> void:
 	randomize()
 	look = PRESETS["Ночь"].duplicate(true)   # пресет по умолчанию
+	current_preset = "Ночь"
 	_build_base_roads()
 	_build_bridges()
 	_build_environment()
@@ -1629,7 +1633,9 @@ func _apply_look() -> void:
 func apply_preset(name: String) -> void:
 	if PRESETS.has(name):
 		look = PRESETS[name].duplicate(true)
+		current_preset = name
 		_apply_look()
+		_update_style_buttons()
 		_flash("Пресет: " + name)
 
 func save_look() -> void:
@@ -1645,7 +1651,9 @@ func load_look() -> bool:
 		return false
 	for k in c.get_section_keys("look"):
 		look[k] = c.get_value("look", k)
+	current_preset = ""   # загружены свои настройки — ни один пресет не активен
 	_apply_look()
+	_update_style_buttons()
 	_flash("Загружено")
 	return true
 
@@ -1896,6 +1904,66 @@ func _build_ui() -> void:
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ui.add_child(cam_hint)
 
+	_build_style_menu()
+
+func _build_style_menu() -> void:
+	style_panel = PanelContainer.new()
+	style_panel.anchor_left = 1.0
+	style_panel.anchor_right = 1.0
+	style_panel.anchor_top = 0.0
+	style_panel.anchor_bottom = 0.0
+	style_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN  # растём влево от правого края
+	style_panel.grow_vertical = Control.GROW_DIRECTION_END      # растём вниз
+	style_panel.offset_left = -8
+	style_panel.offset_right = -8
+	style_panel.offset_top = 8
+	style_panel.offset_bottom = 8
+	style_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0, 0, 0, 0.55)
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 8
+	style_panel.add_theme_stylebox_override("panel", sb)
+	ui.add_child(style_panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 5)
+	style_panel.add_child(vb)
+	var title := Label.new()
+	title.text = "Оформление"
+	title.add_theme_font_size_override("font_size", 16)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	for name in PRESETS.keys():
+		var btn := Button.new()
+		btn.text = name
+		btn.custom_minimum_size = Vector2(165, 32)
+		var nm: String = name
+		btn.pressed.connect(func(): apply_preset(nm))
+		vb.add_child(btn)
+		style_buttons[name] = btn
+	vb.add_child(HSeparator.new())
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 5)
+	vb.add_child(row)
+	var save_btn := Button.new()
+	save_btn.text = "Сохранить"
+	save_btn.custom_minimum_size = Vector2(80, 28)
+	save_btn.pressed.connect(save_look)
+	row.add_child(save_btn)
+	var load_btn := Button.new()
+	load_btn.text = "Загрузить"
+	load_btn.custom_minimum_size = Vector2(80, 28)
+	load_btn.pressed.connect(func(): load_look())
+	row.add_child(load_btn)
+	_update_style_buttons()
+
+func _update_style_buttons() -> void:
+	for name in style_buttons:
+		style_buttons[name].modulate = Color(1, 0.85, 0.35) if name == current_preset else Color(1, 1, 1)
+
 func _mk_label(x: float, y: float, size: int, shadow: bool) -> Label:
 	var l := Label.new()
 	l.position = Vector2(x, y)
@@ -1934,6 +2002,7 @@ func _update_ui() -> void:
 		else:
 			hud_mode.text = "Догони бандита!" if mode == "chase" else "Уходи от полиции!"
 			hud_time.text = "Время: %.1f c" % modeTime
+
 
 
 

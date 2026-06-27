@@ -139,6 +139,8 @@ var PRESETS := {
 		"sky_top": Color(0.003, 0.005, 0.016), "sky_horizon": Color(0.018, 0.026, 0.058), "star": 1.0,
 		"hl_energy": 38.0, "hl_range": 420.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.95, 0.78),
 		"highlight_emission": 1.8,
+		# стиль рендера
+		"tonemap": "filmic", "exposure": 1.0, "contrast": 1.05, "saturation": 1.12, "brightness": 1.0,
 	},
 	"Сумерки": {
 		"ambient_color": Color(0.32, 0.30, 0.42), "ambient_energy": 0.7,
@@ -147,14 +149,17 @@ var PRESETS := {
 		"sky_top": Color(0.10, 0.10, 0.22), "sky_horizon": Color(0.55, 0.35, 0.30), "star": 0.35,
 		"hl_energy": 16.0, "hl_range": 300.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.96, 0.82),
 		"highlight_emission": 1.2,
+		"tonemap": "agx", "exposure": 1.0, "contrast": 1.02, "saturation": 1.08, "brightness": 1.0,
 	},
 	"День": {
-		"ambient_color": Color(0.70, 0.78, 0.92), "ambient_energy": 1.0,
-		"moon_color": Color(1.0, 0.96, 0.85), "moon_energy": 1.2,
-		"glow_intensity": 0.5, "glow_bloom": 0.05, "glow_threshold": 1.0,
-		"sky_top": Color(0.22, 0.42, 0.75), "sky_horizon": Color(0.72, 0.84, 0.93), "star": 0.0,
+		"ambient_color": Color(0.60, 0.67, 0.80), "ambient_energy": 0.55,
+		"moon_color": Color(1.0, 0.95, 0.84), "moon_energy": 0.85,
+		"glow_intensity": 0.2, "glow_bloom": 0.0, "glow_threshold": 1.3,
+		"sky_top": Color(0.20, 0.38, 0.68), "sky_horizon": Color(0.62, 0.74, 0.86), "star": 0.0,
 		"hl_energy": 5.0, "hl_range": 180.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.97, 0.85),
 		"highlight_emission": 0.7,
+		# AgX мягко гасит пересветы — день без «пережаренности»
+		"tonemap": "agx", "exposure": 0.9, "contrast": 1.02, "saturation": 1.0, "brightness": 1.0,
 	},
 }
 var flash_label: Label
@@ -1584,6 +1589,20 @@ func _apply_look() -> void:
 		env.glow_intensity = look["glow_intensity"]
 		env.glow_bloom = look["glow_bloom"]
 		env.glow_hdr_threshold = look["glow_threshold"]
+		# стиль рендера: тонмаппинг + экспозиция + цветокоррекция
+		var tm := {
+			"linear": Environment.TONE_MAPPER_LINEAR,
+			"reinhard": Environment.TONE_MAPPER_REINHARDT,
+			"filmic": Environment.TONE_MAPPER_FILMIC,
+			"aces": Environment.TONE_MAPPER_ACES,
+			"agx": Environment.TONE_MAPPER_AGX,
+		}
+		env.tonemap_mode = tm.get(look.get("tonemap", "filmic"), Environment.TONE_MAPPER_FILMIC)
+		env.tonemap_exposure = look.get("exposure", 1.0)
+		env.adjustment_enabled = true
+		env.adjustment_brightness = look.get("brightness", 1.0)
+		env.adjustment_contrast = look.get("contrast", 1.0)
+		env.adjustment_saturation = look.get("saturation", 1.0)
 	if moon:
 		moon.light_color = look["moon_color"]
 		moon.light_energy = look["moon_energy"]
@@ -1915,6 +1934,7 @@ func _update_ui() -> void:
 		else:
 			hud_mode.text = "Догони бандита!" if mode == "chase" else "Уходи от полиции!"
 			hud_time.text = "Время: %.1f c" % modeTime
+
 
 
 

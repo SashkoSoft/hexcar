@@ -1521,8 +1521,8 @@ shader_type canvas_item;
 
 uniform sampler2D screen_tex : hint_screen_texture, repeat_disable, filter_linear;
 uniform int u_style = 0;
-uniform float u_canny_low = 0.16;    // нижний порог (слабые края — тянутся только к сильным)
-uniform float u_canny_high = 0.42;   // верхний порог (сильные края)
+uniform float u_canny_low = 0.22;    // нижний порог (слабые края — тянутся только к сильным)
+uniform float u_canny_high = 0.52;   // верхний порог (сильные края)
 uniform float u_canny_line = 0.85;   // насыщенность линии (0..1)
 
 float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
@@ -1555,12 +1555,16 @@ float edge_sobel(vec2 uv, vec2 px){
 	float gy = -tl - 2.0 * t - tr + bl + 2.0 * b + br;
 	return sqrt(gx * gx + gy * gy);
 }
-// дешёвая сглаженная яркость (5-тап крест) — шаг подавления шума в Canny
+// сглаженная яркость (гаусс 3x3, радиус R) — подавление шума перед детекцией Canny
+uniform float u_canny_blur = 1.7;
 float luma_blur(vec2 uv, vec2 px){
-	float s = luma(samp(uv)) * 2.0;
-	s += luma(samp(uv + vec2(px.x, 0.0))) + luma(samp(uv - vec2(px.x, 0.0)));
-	s += luma(samp(uv + vec2(0.0, px.y))) + luma(samp(uv - vec2(0.0, px.y)));
-	return s / 6.0;
+	vec2 r = px * u_canny_blur;
+	float s = luma(samp(uv)) * 4.0;
+	s += (luma(samp(uv + vec2(r.x, 0.0))) + luma(samp(uv - vec2(r.x, 0.0)))) * 2.0;
+	s += (luma(samp(uv + vec2(0.0, r.y))) + luma(samp(uv - vec2(0.0, r.y)))) * 2.0;
+	s += luma(samp(uv + r)) + luma(samp(uv - r));
+	s += luma(samp(uv + vec2(r.x, -r.y))) + luma(samp(uv - vec2(r.x, -r.y)));
+	return s / 16.0;
 }
 // градиент Собеля по сглаженной яркости (центр — качественно)
 vec2 sobel_grad(vec2 uv, vec2 px){
@@ -1577,20 +1581,8 @@ vec2 sobel_grad(vec2 uv, vec2 px){
 	return vec2(gx, gy);
 }
 float gmag(vec2 uv, vec2 px){ return length(sobel_grad(uv, px)); }
-// быстрая магнитуда по сырой яркости — для проверки соседей (NMS/гистерезис)
-float gmag_fast(vec2 uv, vec2 px){
-	float tl = luma(samp(uv + px * vec2(-1.0, -1.0)));
-	float t  = luma(samp(uv + px * vec2( 0.0, -1.0)));
-	float tr = luma(samp(uv + px * vec2( 1.0, -1.0)));
-	float l  = luma(samp(uv + px * vec2(-1.0,  0.0)));
-	float r  = luma(samp(uv + px * vec2( 1.0,  0.0)));
-	float bl = luma(samp(uv + px * vec2(-1.0,  1.0)));
-	float b  = luma(samp(uv + px * vec2( 0.0,  1.0)));
-	float br = luma(samp(uv + px * vec2( 1.0,  1.0)));
-	float gx = -tl - 2.0 * l - bl + tr + 2.0 * r + br;
-	float gy = -tl - 2.0 * t - tr + bl + 2.0 * b + br;
-	return sqrt(gx * gx + gy * gy);
-}
+// магнитуда по сглаженной яркости — для проверки соседей (NMS/гистерезис), тот же денойз
+float gmag_fast(vec2 uv, vec2 px){ return length(sobel_grad(uv, px)); }
 
 void fragment(){
 	vec2 uv = SCREEN_UV;
@@ -1637,7 +1629,7 @@ void fragment(){
 		c *= 0.94 + 0.10 * canvas;                 // фактура холста
 		col = clamp(c, 0.0, 1.0);
 	} else if (u_style == 4){
-		// КАРАНДАШ / CANNY — контурный рисунок: градиент → NMS → двойной порог + гистерезис
+		// КАРАНДАШ / CANNY — контур: градиент → NMS → двойной порог + гистерезис + чистка одиночных точек
 		vec2 g = sobel_grad(uv, px);
 		float mag = length(g);
 		// 1) подавление немаксимумов: вдоль направления градиента оставляем только локальный максимум
@@ -1645,24 +1637,26 @@ void fragment(){
 		float ma = gmag_fast(uv + dir * px, px);
 		float mb = gmag_fast(uv - dir * px, px);
 		float nms = (mag >= ma && mag >= mb) ? mag : 0.0;
+		// соседи по кресту (та же сглаженная магнитуда)
+		float n_r = gmag_fast(uv + vec2(px.x, 0.0), px);
+		float n_l = gmag_fast(uv - vec2(px.x, 0.0), px);
+		float n_u = gmag_fast(uv + vec2(0.0, px.y), px);
+		float n_d = gmag_fast(uv - vec2(0.0, px.y), px);
 		// 2) двойной порог
 		float strong = step(u_canny_high, nms);
 		float weak = step(u_canny_low, nms) * (1.0 - strong);
-		// 3) гистерезис: слабый край остаётся, только если рядом есть сильный
-		float near_strong = 0.0;
-		near_strong = max(near_strong, step(u_canny_high, gmag_fast(uv + px * vec2( 1.0,  0.0), px)));
-		near_strong = max(near_strong, step(u_canny_high, gmag_fast(uv + px * vec2(-1.0,  0.0), px)));
-		near_strong = max(near_strong, step(u_canny_high, gmag_fast(uv + px * vec2( 0.0,  1.0), px)));
-		near_strong = max(near_strong, step(u_canny_high, gmag_fast(uv + px * vec2( 0.0, -1.0), px)));
-		near_strong = max(near_strong, step(u_canny_high, gmag_fast(uv + px * vec2( 1.0,  1.0), px)));
-		near_strong = max(near_strong, step(u_canny_high, gmag_fast(uv + px * vec2(-1.0, -1.0), px)));
-		near_strong = max(near_strong, step(u_canny_high, gmag_fast(uv + px * vec2( 1.0, -1.0), px)));
-		near_strong = max(near_strong, step(u_canny_high, gmag_fast(uv + px * vec2(-1.0,  1.0), px)));
-		float edge = clamp(strong + weak * near_strong, 0.0, 1.0);
+		// 3) гистерезис: слабый край держится только рядом с сильным
+		float near_strong = max(max(step(u_canny_high, n_r), step(u_canny_high, n_l)),
+		                        max(step(u_canny_high, n_u), step(u_canny_high, n_d)));
+		// 4) чистка шума: одиночная точка без соседей-краёв отбрасывается (это травинка, а не линия)
+		float conn = step(u_canny_low, n_r) + step(u_canny_low, n_l)
+		           + step(u_canny_low, n_u) + step(u_canny_low, n_d);
+		float keep = step(1.0, conn);              // нужен хотя бы один сосед-край
+		float edge = clamp(strong * keep + weak * near_strong * keep, 0.0, 1.0);
 		// бумага + чёрная линия (мягкая по краю)
-		float aa = smoothstep(u_canny_high * 0.6, u_canny_high, nms);  // сглаживание сильной линии
-		float ink = max(edge, strong * aa) * u_canny_line;
-		float paper = 0.92 + 0.08 * vnoise(uv * res * 0.4);
+		float aa = smoothstep(u_canny_high * 0.6, u_canny_high, nms);
+		float ink = edge * max(aa, weak) * u_canny_line;
+		float paper = 0.97 + 0.03 * vnoise(uv * res * 0.25);   // едва заметная бумага, без шума
 		col = vec3(paper) - ink * vec3(0.86, 0.86, 0.84);
 		col = clamp(col, 0.0, 1.0);
 	}

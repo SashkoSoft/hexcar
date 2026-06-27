@@ -171,6 +171,14 @@ var current_preset := ""        # имя активного пресета (дл
 var style_panel: Control
 var style_buttons := {}         # имя -> Button
 
+# художественный пост-эффект (полноэкранный шейдер поверх 3D)
+var current_style := 0          # 0 нет · 1 тун · 2 акварель · 3 гуашь · 4 карандаш
+const STYLE_NAMES := ["Нет", "Тун", "Акварель", "Гуашь", "Карандаш"]
+var fx_layer: CanvasLayer
+var fx_rect: ColorRect
+var fx_mat: ShaderMaterial
+var style_fx_buttons := {}      # индекс -> Button
+
 # камера (орбитальная, со сглаживанием как в Dorfromantik)
 var cam_pivot: Vector3                  # текущая (сглаженная) точка фокуса
 var cam_yaw := 0.0
@@ -239,6 +247,7 @@ func _ready() -> void:
 	_build_portals()
 	_build_camera()
 	_build_hover_marker()
+	_build_fx()
 	_build_ui()
 	_show_menu()
 	load_look()   # если есть сохранённые настройки на диске — применить их
@@ -1505,6 +1514,145 @@ func _clear_popups() -> void:
 	popups.clear()
 
 # ======================================================================
+# Художественный пост-эффект (полноэкранный canvas-шейдер)
+# ======================================================================
+const _FX_SHADER := """
+shader_type canvas_item;
+
+uniform sampler2D screen_tex : hint_screen_texture, repeat_disable, filter_linear;
+uniform int u_style = 0;
+
+float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){
+	vec2 i = floor(p), f = fract(p);
+	float a = hash(i), b = hash(i + vec2(1.0, 0.0)), c = hash(i + vec2(0.0, 1.0)), d = hash(i + vec2(1.0, 1.0));
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+vec3 samp(vec2 uv){ return texture(screen_tex, uv).rgb; }
+vec3 blur9(vec2 uv, vec2 px, float r){
+	vec3 s = samp(uv) * 4.0;
+	s += samp(uv + vec2(px.x, 0.0) * r) + samp(uv - vec2(px.x, 0.0) * r);
+	s += samp(uv + vec2(0.0, px.y) * r) + samp(uv - vec2(0.0, px.y) * r);
+	s += samp(uv + px * r) + samp(uv - px * r);
+	s += samp(uv + vec2(px.x, -px.y) * r) + samp(uv - vec2(px.x, -px.y) * r);
+	return s / 12.0;
+}
+float edge_sobel(vec2 uv, vec2 px){
+	float tl = luma(samp(uv + px * vec2(-1.0, -1.0)));
+	float t  = luma(samp(uv + px * vec2( 0.0, -1.0)));
+	float tr = luma(samp(uv + px * vec2( 1.0, -1.0)));
+	float l  = luma(samp(uv + px * vec2(-1.0,  0.0)));
+	float r  = luma(samp(uv + px * vec2( 1.0,  0.0)));
+	float bl = luma(samp(uv + px * vec2(-1.0,  1.0)));
+	float b  = luma(samp(uv + px * vec2( 0.0,  1.0)));
+	float br = luma(samp(uv + px * vec2( 1.0,  1.0)));
+	float gx = -tl - 2.0 * l - bl + tr + 2.0 * r + br;
+	float gy = -tl - 2.0 * t - tr + bl + 2.0 * b + br;
+	return sqrt(gx * gx + gy * gy);
+}
+
+void fragment(){
+	vec2 uv = SCREEN_UV;
+	vec2 px = SCREEN_PIXEL_SIZE;
+	vec2 res = 1.0 / px;
+	vec3 col = samp(uv);
+
+	if (u_style == 1){
+		// ТУН — постеризация + чёрный контур
+		vec3 c = col;
+		float l = luma(c);
+		c = mix(vec3(l), c, 1.25);                 // чуть насыщеннее
+		c = floor(c * 5.0 + 0.5) / 5.0;            // ступени цвета
+		float e = edge_sobel(uv, px);
+		float ink = smoothstep(0.28, 0.55, e);
+		c = mix(c, vec3(0.05, 0.05, 0.07), ink);
+		col = c;
+	} else if (u_style == 2){
+		// АКВАРЕЛЬ — растёкшийся мягкий цвет, пигмент по краям, бумага
+		vec2 wob = (vec2(vnoise(uv * res * 0.012), vnoise(uv * res * 0.012 + 19.7)) - 0.5) * px * 10.0;
+		vec3 c = blur9(uv + wob, px, 1.6);
+		c = mix(c, floor(c * 6.0 + 0.5) / 6.0, 0.5);
+		float e = edge_sobel(uv, px);
+		c *= 1.0 - 0.45 * smoothstep(0.12, 0.5, e);
+		float l = luma(c);
+		c = mix(vec3(l), c, 0.85);                 // лёгкая десатурация
+		c = mix(c, vec3(0.98, 0.96, 0.92), 0.12);  // промыв к бумаге
+		float paper = vnoise(uv * res * 0.5);
+		float paper2 = vnoise(uv * res * 0.05);
+		c *= 0.92 + 0.08 * paper;
+		c *= 0.96 + 0.06 * paper2;
+		col = clamp(c, 0.0, 1.0);
+	} else if (u_style == 3){
+		// ГУАШЬ — плотные плоские матовые мазки
+		vec3 c = blur9(uv, px, 1.2);
+		c = pow(clamp(c, 0.0, 1.0), vec3(0.82));   // приподнять тени (краска кроет, нет провалов в чёрный)
+		c = floor(c * 4.0 + 0.5) / 4.0;            // плотная постеризация
+		c = max(c, vec3(0.14));                    // нет чистого чёрного
+		c = mix(c, vec3(0.5), 0.06);               // матовость
+		c = mix(vec3(luma(c)), c, 1.12);           // чуть насыщеннее
+		float e = edge_sobel(uv, px);
+		c *= 1.0 - 0.20 * smoothstep(0.2, 0.55, e);
+		float canvas = vnoise(uv * res * 0.25);
+		c *= 0.94 + 0.10 * canvas;                 // фактура холста
+		col = clamp(c, 0.0, 1.0);
+	} else if (u_style == 4){
+		// КАРАНДАШ — серый, штриховка по тону + контур
+		float g = luma(col);
+		float jitter = (vnoise(uv * res * 0.6) - 0.5) * 6.0;
+		vec2 q = uv * res + jitter;
+		float shade = clamp(1.0 - g, 0.0, 1.0);
+		float ink = 0.0;
+		float l1 = abs(sin((q.x + q.y) * 0.18));
+		float l2 = abs(sin((q.x - q.y) * 0.18));
+		float l3 = abs(sin(q.x * 0.22));
+		float l4 = abs(sin(q.y * 0.22));
+		if (shade > 0.20) ink = max(ink, 1.0 - smoothstep(0.0, 0.35, l1));
+		if (shade > 0.40) ink = max(ink, 1.0 - smoothstep(0.0, 0.35, l2));
+		if (shade > 0.60) ink = max(ink, 1.0 - smoothstep(0.0, 0.35, l3));
+		if (shade > 0.78) ink = max(ink, 1.0 - smoothstep(0.0, 0.35, l4));
+		ink *= smoothstep(0.12, 0.30, shade);
+		float e = edge_sobel(uv, px);
+		ink = max(ink, smoothstep(0.22, 0.5, e));
+		float paper = 0.90 + 0.10 * vnoise(uv * res * 0.4);
+		vec3 pc = vec3(paper) - ink * vec3(0.82, 0.82, 0.80);
+		col = clamp(pc, 0.0, 1.0);
+	}
+	COLOR = vec4(col, 1.0);
+}
+"""
+
+func _build_fx() -> void:
+	fx_layer = CanvasLayer.new()
+	fx_layer.layer = 0   # поверх 3D, но под UI (ui.layer = 1)
+	add_child(fx_layer)
+	var sh := Shader.new()
+	sh.code = _FX_SHADER
+	fx_mat = ShaderMaterial.new()
+	fx_mat.shader = sh
+	fx_mat.set_shader_parameter("u_style", 0)
+	fx_rect = ColorRect.new()
+	fx_rect.material = fx_mat
+	fx_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	fx_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fx_rect.visible = false
+	fx_layer.add_child(fx_rect)
+
+func set_style(idx: int) -> void:
+	current_style = clampi(idx, 0, STYLE_NAMES.size() - 1)
+	if fx_mat:
+		fx_mat.set_shader_parameter("u_style", current_style)
+	if fx_rect:
+		fx_rect.visible = current_style != 0
+	_update_style_fx_buttons()
+	_flash("Стиль: " + STYLE_NAMES[current_style])
+
+func _update_style_fx_buttons() -> void:
+	for i in style_fx_buttons:
+		style_fx_buttons[i].modulate = Color(1, 0.85, 0.35) if i == current_style else Color(1, 1, 1)
+
+# ======================================================================
 # Окружение / камера / маркер
 # ======================================================================
 var _NIGHT_SKY_SHADER := """
@@ -1662,6 +1810,7 @@ func save_look() -> void:
 	var c := ConfigFile.new()
 	for k in look.keys():
 		c.set_value("look", k, look[k])
+	c.set_value("fx", "style", current_style)
 	var err := c.save(LOOK_PATH)
 	_flash("Сохранено" if err == OK else "Ошибка сохранения")
 
@@ -1674,6 +1823,8 @@ func load_look() -> bool:
 	current_preset = ""   # загружены свои настройки — ни один пресет не активен
 	_apply_look()
 	_update_style_buttons()
+	if c.has_section_key("fx", "style"):
+		set_style(int(c.get_value("fx", "style", 0)))
 	_flash("Загружено")
 	return true
 
@@ -1978,7 +2129,23 @@ func _build_style_menu() -> void:
 	load_btn.custom_minimum_size = Vector2(80, 28)
 	load_btn.pressed.connect(func(): load_look())
 	row.add_child(load_btn)
+	# --- переключатель художественного стиля ---
+	vb.add_child(HSeparator.new())
+	var stitle := Label.new()
+	stitle.text = "Стиль рисунка"
+	stitle.add_theme_font_size_override("font_size", 14)
+	stitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(stitle)
+	for i in STYLE_NAMES.size():
+		var sbtn := Button.new()
+		sbtn.text = STYLE_NAMES[i]
+		sbtn.custom_minimum_size = Vector2(165, 28)
+		var idx: int = i
+		sbtn.pressed.connect(func(): set_style(idx))
+		vb.add_child(sbtn)
+		style_fx_buttons[i] = sbtn
 	_update_style_buttons()
+	_update_style_fx_buttons()
 
 func _update_style_buttons() -> void:
 	for name in style_buttons:

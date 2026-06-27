@@ -172,8 +172,13 @@ var style_panel: Control
 var style_buttons := {}         # имя -> Button
 
 # художественный пост-эффект (полноэкранный шейдер поверх 3D)
-var current_style := 0          # 0 нет · 1 тун · 2 акварель · 3 гуашь · 4 карандаш
-const STYLE_NAMES := ["Нет", "Тун", "Акварель", "Гуашь", "Карандаш"]
+var current_style := 0          # 0 нет · 1 тун · 2 акварель · 3 гуашь · 4 карандаш · 5 карандаш 2
+const STYLE_NAMES := ["Нет", "Тун", "Акварель", "Гуашь", "Карандаш", "Карандаш 2"]
+# параметры Canny для карандашных стилей (low/high — пороги, blur — денойз, paper — зерно)
+const CANNY_CFG := {
+	4: {"low": 0.22, "high": 0.52, "blur": 1.7, "line": 0.85, "paper": 0.0},    # узкий диапазон, чистый фон
+	5: {"low": 0.12, "high": 0.34, "blur": 1.3, "line": 0.90, "paper": 0.0},    # широкий диапазон — больше деталей, чистый фон
+}
 var fx_layer: CanvasLayer
 var fx_rect: ColorRect
 var fx_mat: ShaderMaterial
@@ -1524,6 +1529,7 @@ uniform int u_style = 0;
 uniform float u_canny_low = 0.22;    // нижний порог (слабые края — тянутся только к сильным)
 uniform float u_canny_high = 0.52;   // верхний порог (сильные края)
 uniform float u_canny_line = 0.85;   // насыщенность линии (0..1)
+uniform float u_canny_paper = 0.015; // зерно бумаги (0 — чистый фон)
 
 float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
 float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -1628,7 +1634,7 @@ void fragment(){
 		float canvas = vnoise(uv * res * 0.25);
 		c *= 0.94 + 0.10 * canvas;                 // фактура холста
 		col = clamp(c, 0.0, 1.0);
-	} else if (u_style == 4){
+	} else if (u_style >= 4){
 		// КАРАНДАШ / CANNY — контур: градиент → NMS → двойной порог + гистерезис + чистка одиночных точек
 		vec2 g = sobel_grad(uv, px);
 		float mag = length(g);
@@ -1656,7 +1662,7 @@ void fragment(){
 		// бумага + чёрная линия (мягкая по краю)
 		float aa = smoothstep(u_canny_high * 0.6, u_canny_high, nms);
 		float ink = edge * max(aa, weak) * u_canny_line;
-		float paper = 0.97 + 0.03 * vnoise(uv * res * 0.25);   // едва заметная бумага, без шума
+		float paper = 1.0 - u_canny_paper + u_canny_paper * vnoise(uv * res * 0.25);
 		col = vec3(paper) - ink * vec3(0.86, 0.86, 0.84);
 		col = clamp(col, 0.0, 1.0);
 	}
@@ -1684,6 +1690,13 @@ func set_style(idx: int) -> void:
 	current_style = clampi(idx, 0, STYLE_NAMES.size() - 1)
 	if fx_mat:
 		fx_mat.set_shader_parameter("u_style", current_style)
+		if CANNY_CFG.has(current_style):
+			var cfg: Dictionary = CANNY_CFG[current_style]
+			fx_mat.set_shader_parameter("u_canny_low", cfg["low"])
+			fx_mat.set_shader_parameter("u_canny_high", cfg["high"])
+			fx_mat.set_shader_parameter("u_canny_blur", cfg["blur"])
+			fx_mat.set_shader_parameter("u_canny_line", cfg["line"])
+			fx_mat.set_shader_parameter("u_canny_paper", cfg["paper"])
 	if fx_rect:
 		fx_rect.visible = current_style != 0
 	_update_style_fx_buttons()

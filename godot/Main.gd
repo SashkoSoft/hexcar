@@ -172,12 +172,13 @@ var style_panel: Control
 var style_buttons := {}         # имя -> Button
 
 # художественный пост-эффект (полноэкранный шейдер поверх 3D)
-var current_style := 0          # 0 нет · 1 тун · 2 акварель · 3 гуашь · 4 карандаш · 5 карандаш 2
-const STYLE_NAMES := ["Нет", "Тун", "Акварель", "Гуашь", "Карандаш", "Карандаш 2"]
-# параметры Canny для карандашных стилей (low/high — пороги, blur — денойз, paper — зерно)
+var current_style := 0          # 0 нет · 1 тун · 2 акварель · 3 гуашь · 4 карандаш · 5 карандаш 2 · 6 контур+цвет
+const STYLE_NAMES := ["Нет", "Тун", "Акварель", "Гуашь", "Карандаш", "Карандаш 2", "Контур+цвет"]
+# параметры Canny (low/high — пороги, blur — денойз, paper — зерно, mult — наложение на цвет multiply)
 const CANNY_CFG := {
-	4: {"low": 0.22, "high": 0.52, "blur": 1.7, "line": 0.85, "paper": 0.0},    # узкий диапазон, чистый фон
-	5: {"low": 0.12, "high": 0.34, "blur": 1.3, "line": 0.90, "paper": 0.0},    # широкий диапазон — больше деталей, чистый фон
+	4: {"low": 0.14, "high": 0.36, "blur": 1.5, "line": 0.85, "paper": 0.0, "mult": 0.0},  # расширенный — больше линий
+	5: {"low": 0.09, "high": 0.26, "blur": 1.2, "line": 0.90, "paper": 0.0, "mult": 0.0},  # широкий — максимум деталей
+	6: {"low": 0.10, "high": 0.28, "blur": 1.3, "line": 0.95, "paper": 0.0, "mult": 1.0},  # контур ×цветной рендер
 }
 var fx_layer: CanvasLayer
 var fx_rect: ColorRect
@@ -1530,6 +1531,7 @@ uniform float u_canny_low = 0.22;    // нижний порог (слабые к
 uniform float u_canny_high = 0.52;   // верхний порог (сильные края)
 uniform float u_canny_line = 0.85;   // насыщенность линии (0..1)
 uniform float u_canny_paper = 0.015; // зерно бумаги (0 — чистый фон)
+uniform float u_canny_mult = 0.0;    // 0 — линии на бумаге, 1 — линии ×цветной рендер (multiply)
 
 float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
 float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -1663,8 +1665,9 @@ void fragment(){
 		float aa = smoothstep(u_canny_high * 0.6, u_canny_high, nms);
 		float ink = edge * max(aa, weak) * u_canny_line;
 		float paper = 1.0 - u_canny_paper + u_canny_paper * vnoise(uv * res * 0.25);
-		col = vec3(paper) - ink * vec3(0.86, 0.86, 0.84);
-		col = clamp(col, 0.0, 1.0);
+		vec3 line_col = vec3(paper) - ink * vec3(0.86, 0.86, 0.84);   // линии на бумаге
+		vec3 mult_col = col * (1.0 - ink * 0.92);                     // линии × цветной рендер (multiply)
+		col = clamp(mix(line_col, mult_col, u_canny_mult), 0.0, 1.0);
 	}
 	COLOR = vec4(col, 1.0);
 }
@@ -1697,6 +1700,7 @@ func set_style(idx: int) -> void:
 			fx_mat.set_shader_parameter("u_canny_blur", cfg["blur"])
 			fx_mat.set_shader_parameter("u_canny_line", cfg["line"])
 			fx_mat.set_shader_parameter("u_canny_paper", cfg["paper"])
+			fx_mat.set_shader_parameter("u_canny_mult", cfg.get("mult", 0.0))
 	if fx_rect:
 		fx_rect.visible = current_style != 0
 	_update_style_fx_buttons()

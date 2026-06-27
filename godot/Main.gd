@@ -1619,20 +1619,14 @@ float canny_ink(vec2 uv, vec2 px){
 	return clamp(max(strong, weak * near_strong) * keep, 0.0, 1.0);
 }
 
-// тун-градиент: мягкие ступени яркости (плавный переход) + тёплые тени / холодные света
-vec3 toon_grad(vec3 c){
+// тун-градиент (ч/б): мягкие ступени яркости — плавный переход между ступенями
+float toon_lum(vec3 c){
 	float l = luma(c);
 	float L = l * 0.75 + 0.22;                                    // приподнять тени — не проваливаются в чёрный
 	float bands = 4.0;
 	float q = floor(L * bands) / bands;
 	float f = fract(L * bands);
-	float soft = q + (1.0 / bands) * smoothstep(0.35, 0.65, f);   // плавная ступень = градиент
-	vec3 hue = c / max(l, 0.06);                                  // нормализованный цвет, стабилен в тенях
-	vec3 tc = hue * soft;
-	vec3 warm = vec3(1.08, 0.99, 0.86);
-	vec3 cool = vec3(0.92, 0.99, 1.08);
-	tc *= mix(warm, cool, smoothstep(0.2, 0.8, l));               // градиент по тону (тёплые тени / холодные света)
-	return clamp(tc, 0.0, 1.0);
+	return clamp(q + (1.0 / bands) * smoothstep(0.35, 0.65, f), 0.0, 1.0);
 }
 
 void fragment(){
@@ -1678,15 +1672,17 @@ void fragment(){
 		c *= 0.97 + 0.03 * canvas;
 		col = clamp(c, 0.0, 1.0);
 	} else if (u_style == 7){
-		// ТУН ГРАДИЕНТ — мягкие ступени + тёплые тени/холодные света + мягкий контур
-		vec3 c = toon_grad(col);
+		// ТУН ГРАДИЕНТ (ч/б) — мягкие ступени яркости + мягкий контур
+		float t = toon_lum(col);
+		vec3 c = vec3(t);
 		float e = edge_sobel(uv, px);
 		c = mix(c, c * 0.18, smoothstep(0.3, 0.6, e));
 		col = clamp(c, 0.0, 1.0);
 	} else if (u_style >= 4){
-		// КАРАНДАШ / CANNY (антиалиас) — контур; mult → ×цвет, toon → база через тун-градиент
+		// КАРАНДАШ / CANNY (антиалиас) — контур; mult → ×цвет, toon → ч/б тун multiply на цвет
 		float ink = canny_ink(uv, px) * u_canny_line;
-		vec3 base = (u_canny_toon > 0.5) ? toon_grad(col) : col;
+		// ч/б тун как multiply-слой: множитель вокруг 1.0 (ступени затемняют/осветляют, без общего провала)
+		vec3 base = (u_canny_toon > 0.5) ? clamp(col * (0.65 + 0.7 * toon_lum(col)), 0.0, 1.0) : col;
 		float paper = 1.0 - u_canny_paper + u_canny_paper * vnoise(uv * res * 0.04);
 		vec3 line_col = vec3(paper) - ink * vec3(0.86, 0.86, 0.84);   // линии на бумаге
 		vec3 mult_col = base * (1.0 - ink);                          // линии × рендер (multiply)

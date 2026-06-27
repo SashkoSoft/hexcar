@@ -762,9 +762,7 @@ func _process(dt: float) -> void:
 # Ввод
 # ======================================================================
 func _update_hover(_dt: float) -> void:
-	if drag_tile >= 0:
-		hover = drag_tile
-	elif gameState == "play":
+	if gameState == "play":
 		hover = _pick_tile()
 	else:
 		hover = -1
@@ -817,30 +815,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			cam_pan = event.pressed
 		elif b == MOUSE_BUTTON_MIDDLE:
 			cam_rot = event.pressed
-		elif b == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				if gameState == "over":
-					_show_menu()
-					return
-				if gameState == "play" and hover >= 0:
-					drag_tile = hover
-					drag_accum = 0.0
-			else:
-				drag_tile = -1
+		elif b == MOUSE_BUTTON_LEFT and event.pressed:
+			# ЛКМ — только плитки: клик = поворот +60°, Shift+клик = −60°
+			if gameState == "over":
+				_show_menu()
+			elif gameState == "play" and hover >= 0:
+				rotate_tile(hover, -1 if event.shift_pressed else 1)
 	elif event is InputEventMouseMotion:
+		# любое перетаскивание мышью — только камера
 		if cam_pan:
 			_pan_drag(event.relative)
 		elif cam_rot:
 			tgt_yaw += event.relative.x * 0.006
 			tgt_pitch = clamp(tgt_pitch - event.relative.y * 0.004, CAM_PITCH_MIN, CAM_PITCH_MAX)
-		elif drag_tile >= 0:
-			drag_accum += event.relative.x
-			while drag_accum >= DRAG_STEP:
-				rotate_tile(drag_tile, 1)
-				drag_accum -= DRAG_STEP
-			while drag_accum <= -DRAG_STEP:
-				rotate_tile(drag_tile, -1)
-				drag_accum += DRAG_STEP
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if gameState == "play" and hover >= 0:
 			if event.keycode == KEY_LEFT or event.keycode == KEY_A:
@@ -1195,7 +1182,7 @@ func _build_decor(t: Tile) -> void:
 	var gc := []
 	var gp := 0
 	var gg := 0
-	while gp < 300 and gg < 2400:
+	while gp < 600 and gg < 5000:
 		gg += 1
 		var a := randf() * TAU
 		var rad := sqrt(randf()) * A * 1.03
@@ -1271,6 +1258,18 @@ func _build_decor(t: Tile) -> void:
 			sc = 0.8 + randf() * 0.5
 		items.append({"type": type, "x": x, "y": y, "sc": sc, "rot": randf() * TAU})
 		placed += 1
+	# дополнительный проход деревьев (удвоение) — подальше от дороги
+	placed = 0
+	guard = 0
+	while placed < 8 and guard < 500:
+		guard += 1
+		var a := randf() * TAU
+		var rad := sqrt(randf()) * A * 0.92
+		var x := cos(a) * rad
+		var y := sin(a) * rad
+		if _dist_to_roads(x, y) - HW > 8.0:
+			items.append({"type": "tree", "x": x, "y": y, "sc": 0.8 + randf() * 0.5, "rot": randf() * TAU})
+			placed += 1
 	for it in items:
 		_spawn_decor_node(t, it)
 
@@ -1350,11 +1349,11 @@ func _build_car_node(c: Car) -> void:
 	for s in [-1.0, 1.0]:
 		var spot := SpotLight3D.new()
 		spot.light_color = Color(1.0, 0.95, 0.78)
-		spot.light_energy = 20.0
-		spot.spot_range = 240.0
-		spot.spot_angle = 32.0
-		spot.spot_angle_attenuation = 0.9
-		spot.spot_attenuation = 0.9
+		spot.light_energy = 38.0
+		spot.spot_range = 420.0
+		spot.spot_angle = 30.0
+		spot.spot_angle_attenuation = 0.7
+		spot.spot_attenuation = 0.6
 		spot.shadow_enabled = false
 		spot.transform = Transform3D(Basis(lx, ly, lz), Vector3(length * 0.5, hl_y, s * width * 0.30))
 		root.add_child(spot)
@@ -1437,28 +1436,61 @@ func _clear_popups() -> void:
 # ======================================================================
 # Окружение / камера / маркер
 # ======================================================================
+var _NIGHT_SKY_SHADER := """
+shader_type sky;
+
+float hash(vec3 p) {
+	return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+}
+
+float star_layer(vec3 d, float scale, float thr) {
+	vec3 p = d * scale;
+	vec3 cell = floor(p);
+	float h = hash(cell);
+	if (h <= thr) return 0.0;
+	vec3 fp = fract(p) - 0.5;
+	float core = smoothstep(0.45, 0.0, length(fp));
+	float bright = (h - thr) / (1.0 - thr);
+	float tw = 0.5 + 0.5 * sin(TIME * 2.5 + h * 120.0);
+	return core * bright * (0.4 + 0.6 * tw);
+}
+
+void sky() {
+	vec3 d = normalize(EYEDIR);
+	float up = clamp(d.y, 0.0, 1.0);
+	vec3 base = mix(vec3(0.018, 0.026, 0.058), vec3(0.003, 0.005, 0.016), up);
+	float star = 0.0;
+	if (d.y > 0.01) {
+		star += star_layer(d, 200.0, 0.983);
+		star += star_layer(d, 340.0, 0.989) * 0.8;
+		star *= smoothstep(0.0, 0.10, d.y);
+	}
+	vec3 sc = mix(vec3(0.8, 0.86, 1.0), vec3(1.0, 0.94, 0.78), hash(floor(d * 97.0)));
+	COLOR = base + sc * star * 3.0;
+}
+"""
+
 func _build_environment() -> void:
 	var we := WorldEnvironment.new()
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color8(0x05, 0x07, 0x14)
-	sky_mat.sky_horizon_color = Color8(0x12, 0x18, 0x30)
-	sky_mat.ground_horizon_color = Color8(0x10, 0x14, 0x26)
-	sky_mat.ground_bottom_color = Color8(0x04, 0x05, 0x0c)
+	var sky_shader := Shader.new()
+	sky_shader.code = _NIGHT_SKY_SHADER
+	var sky_mat := ShaderMaterial.new()
+	sky_mat.shader = sky_shader
 	sky.sky_material = sky_mat
 	env.sky = sky
-	# ночь: холодный, но различимый ambient (лунный свет)
+	# глубокая ночь: тусклый холодный ambient
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color8(0x32, 0x3d, 0x63)
-	env.ambient_light_energy = 0.6
+	env.ambient_light_color = Color8(0x1e, 0x26, 0x42)
+	env.ambient_light_energy = 0.28
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	# свечение для фар/подсветки кругов
+	# свечение для фар/подсветки кругов/звёзд
 	env.glow_enabled = true
-	env.glow_intensity = 1.0
-	env.glow_bloom = 0.2
-	env.glow_hdr_threshold = 0.85
+	env.glow_intensity = 1.1
+	env.glow_bloom = 0.25
+	env.glow_hdr_threshold = 0.8
 	# объёмный туман выключен: при дальней камере он затягивал всё поле в дымку
 	env.volumetric_fog_enabled = false
 	we.environment = env
@@ -1467,8 +1499,8 @@ func _build_environment() -> void:
 	# луна (холодный направленный свет)
 	var moon := DirectionalLight3D.new()
 	moon.rotation = Vector3(deg_to_rad(-55.0), deg_to_rad(35.0), 0.0)
-	moon.light_color = Color8(0x7d, 0x92, 0xd6)
-	moon.light_energy = 0.38
+	moon.light_color = Color8(0x86, 0x9b, 0xde)
+	moon.light_energy = 0.25
 	moon.shadow_enabled = true
 	moon.directional_shadow_max_distance = 3000.0
 	add_child(moon)
@@ -1695,7 +1727,7 @@ func _build_ui() -> void:
 
 	# --- подсказка по камере (всегда видна) ---
 	var cam_hint := Label.new()
-	cam_hint.text = "Камера:  ПКМ — тащить  ·  СКМ — вращать/наклон  ·  колесо — зум к курсору  ·  Q/E/R/F/Z/X"
+	cam_hint.text = "Плитка: ЛКМ — повернуть (Shift — назад), ←/→ или A/S      Камера: ПКМ — тащить · СКМ — вращать · колесо — зум · Q/E/R/F/Z/X"
 	cam_hint.add_theme_font_size_override("font_size", 14)
 	cam_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
 	cam_hint.add_theme_color_override("font_outline_color", Color(0, 0, 0))
@@ -1747,6 +1779,7 @@ func _update_ui() -> void:
 		else:
 			hud_mode.text = "Догони бандита!" if mode == "chase" else "Уходи от полиции!"
 			hud_time.text = "Время: %.1f c" % modeTime
+
 
 
 

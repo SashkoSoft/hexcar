@@ -2,6 +2,10 @@
 .godot/
 .import/
 export.cfg
-export_presets.cfg
 *.translation
 _shot*.png
+
+# собранные исполняемые файлы (большие, не коммитим; export_presets.cfg оставляем)
+build/
+*.exe
+*.pck

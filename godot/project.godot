@@ -10,6 +10,8 @@ config/description="3D-порт головоломки HexCar (вид сверх
 run/main_scene="res://Main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.02, 0.03, 0.06, 1)
 
 [display]
 

@@ -13,6 +13,19 @@
 
 Или открыть папку `godot/` в редакторе Godot 4.7 и нажать ▶ (главная сцена — `Main.tscn`).
 
+## Сборка standalone .exe
+
+Нужны шаблоны экспорта 4.7 (один раз: в редакторе *Проект → Экспорт → Управление шаблонами → Скачать*).
+Затем из корня репозитория:
+
+```bash
+./Godot_v4.7-stable_win64_console.exe --headless --path godot \
+  --export-release "Windows Desktop" build/HexCar3D.exe
+```
+
+Получается один самодостаточный файл `godot/build/HexCar3D.exe` (контент встроен).
+Заставка Godot отключена (`boot_splash/show_image=false` в `project.godot`).
+
 ## Что внутри
 
 - **`Main.gd`** — весь проект в одном скрипте: геометрия плиток Труше, три дороги-дуги

@@ -153,7 +153,7 @@ var PRESETS := {
 		"glow_intensity": 1.1, "glow_bloom": 0.25, "glow_threshold": 0.8,
 		"sky_top": Color(0.003, 0.005, 0.016), "sky_horizon": Color(0.018, 0.026, 0.058), "star": 1.0,
 		"hl_energy": 38.0, "hl_range": 420.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.95, 0.78),
-		"highlight_emission": 1.8,
+		"highlight_emission": 1.8, "hl_white": 0.4,
 		# стиль рендера
 		"tonemap": "filmic", "exposure": 1.0, "contrast": 1.05, "saturation": 1.12, "brightness": 1.0,
 		"sun": 0.0,
@@ -164,7 +164,7 @@ var PRESETS := {
 		"glow_intensity": 0.9, "glow_bloom": 0.15, "glow_threshold": 0.9,
 		"sky_top": Color(0.10, 0.10, 0.22), "sky_horizon": Color(0.55, 0.35, 0.30), "star": 0.35,
 		"hl_energy": 16.0, "hl_range": 300.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.96, 0.82),
-		"highlight_emission": 1.2,
+		"highlight_emission": 1.5, "hl_white": 0.18,
 		"tonemap": "agx", "exposure": 1.0, "contrast": 1.02, "saturation": 1.08, "brightness": 1.0,
 		"sun": 0.5,
 	},
@@ -174,7 +174,7 @@ var PRESETS := {
 		"glow_intensity": 0.25, "glow_bloom": 0.05, "glow_threshold": 1.1,
 		"sky_top": Color(0.20, 0.40, 0.72), "sky_horizon": Color(0.66, 0.78, 0.88), "star": 0.0,
 		"hl_energy": 5.0, "hl_range": 180.0, "hl_angle": 30.0, "hl_color": Color(1.0, 0.97, 0.85),
-		"highlight_emission": 0.7,
+		"highlight_emission": 1.6, "hl_white": 0.0,
 		# тёплое солнце + чёткие тени (низкий ambient), AgX гасит пересветы
 		"tonemap": "agx", "exposure": 0.95, "contrast": 1.15, "saturation": 1.08, "brightness": 1.0,
 		"sun": 1.0,
@@ -963,13 +963,18 @@ func step_chase(dt: float) -> void:
 
 # подсветка дорог замкнутых кругов цветом машинки (тонируем асфальт, surface 0)
 func _road_tint_mat(col: Color) -> StandardMaterial3D:
+	# Ночью подсветка читается за счёт свечения (неон); днём свечения почти нет,
+	# поэтому база должна быть НАСЫЩЕННОЙ краской, а не блёкло-белой — иначе тускло
+	# и пересвечено. hl_white управляет подмесом к белому (ночь — больше, день — 0),
+	# а emission = сам цвет (а не белый) держит насыщенность и при ярком свете.
 	var emit: float = look.get("highlight_emission", 1.8)
-	var key := "roadtint|" + str(col) + "|" + str(emit)
+	var white_mix: float = look.get("hl_white", 0.4)
+	var key := "roadtint|" + str(col) + "|" + str(emit) + "|" + str(white_mix)
 	if mat_cache.has(key):
 		return mat_cache[key]
 	var m := StandardMaterial3D.new()
-	m.albedo_color = col.lerp(Color.WHITE, 0.4)
-	m.roughness = 0.7
+	m.albedo_color = col.lerp(Color.WHITE, white_mix)
+	m.roughness = 0.55
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.emission_enabled = true
 	m.emission = col

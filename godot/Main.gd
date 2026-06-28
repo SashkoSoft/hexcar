@@ -2721,12 +2721,17 @@ func _build_ui() -> void:
 	# --- Экран конца ---
 	over_panel = Control.new()
 	over_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# не перехватываем мышь: клик должен дойти до _unhandled_input → _show_menu
+	# (иначе после Погони/Бандита экран конца «съедает» клик и из него не выйти)
+	over_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(over_panel)
 	var odim := ColorRect.new()
 	odim.color = Color(0, 0, 0, 0.55)
 	odim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	odim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	over_panel.add_child(odim)
 	over_title = Label.new()
+	over_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	over_title.add_theme_font_size_override("font_size", 58)
 	over_title.add_theme_color_override("font_color", Color8(0xff, 0xd4, 0x00))
 	over_title.set_anchors_preset(Control.PRESET_CENTER)
@@ -2737,6 +2742,7 @@ func _build_ui() -> void:
 	over_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	over_panel.add_child(over_title)
 	over_sub = Label.new()
+	over_sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	over_sub.add_theme_font_size_override("font_size", 24)
 	over_sub.anchor_left = 0.0
 	over_sub.anchor_right = 1.0
@@ -2745,6 +2751,7 @@ func _build_ui() -> void:
 	over_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	over_panel.add_child(over_sub)
 	var hint := Label.new()
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hint.text = "клик — в меню"
 	hint.add_theme_font_size_override("font_size", 18)
 	hint.anchor_left = 0.0

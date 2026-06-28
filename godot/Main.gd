@@ -1313,6 +1313,7 @@ func _seamless(noise: FastNoiseLite, x: int, y: int, sz: int) -> float:
 # растворение к краям (скруглённый квадрат), чтобы поле не выглядело резко
 # обрезанным прямоугольником, а плавно уходило в фон
 const GROUND_PAD := 360.0
+const GROUND_FADE := 130.0   # ширина мягкого края у самой кромки плоскости (узкая полоса)
 const GROUND_SHADER := """
 shader_type spatial;
 render_mode cull_back, depth_draw_opaque, diffuse_burley;
@@ -1334,9 +1335,18 @@ void fragment() {
 """
 
 func _ground_solid() -> float:
-	# плотная зона = площадь плиток + небольшое кольцо травы, дальше тает к краю плоскости
+	# плотная зона почти до самой кромки плоскости; затухание — узкая полоса у края,
+	# т.е. ближняя граница перехода придвинута вплотную к краю карты
 	var half := FIELD_W * 0.5 + GROUND_PAD
-	return (FIELD_W * 0.5 + 110.0) / half
+	return clampf((half - GROUND_FADE) / half, 0.0, 0.999)
+
+# базовый цвет земли сезона — фон у кромки подгоняется под него
+func _ground_base_color(s: String) -> Color:
+	match s:
+		"Зима": return Color(0.90, 0.93, 0.98)
+		"Осень": return Color8(0x5c, 0x72, 0x4c)
+		"Весна": return Color8(0x6f, 0xc0, 0x52)
+		_: return GRASS_COL
 
 func _wrap_ground(tex: Texture2D, rep: float, rough: float) -> ShaderMaterial:
 	var sh := Shader.new()
@@ -2431,7 +2441,13 @@ func _apply_look() -> void:
 		moon.light_energy = look["moon_energy"]
 	if sky_mat:
 		sky_mat.set_shader_parameter("u_sky_top", _v3(look["sky_top"] * g["sky"]))
-		sky_mat.set_shader_parameter("u_sky_horizon", _v3(look["sky_horizon"] * g["sky"]))
+		# фон у горизонта (его и видно вокруг кромки поля) подгоняем максимально
+		# близко к ЦВЕТУ ОСВЕЩЁННОЙ ЗЕМЛИ, чтобы переход поля в фон был незаметен
+		var gb: Color = _ground_base_color(season)
+		var amb_c: Color = look["ambient_color"] * g["amb"] * float(look["ambient_energy"])
+		var dir_c: Color = look["moon_color"] * g["light"] * float(look["moon_energy"]) * 0.30
+		var lit := Color(gb.r * (amb_c.r + dir_c.r), gb.g * (amb_c.g + dir_c.g), gb.b * (amb_c.b + dir_c.b))
+		sky_mat.set_shader_parameter("u_sky_horizon", _v3(lit))
 		sky_mat.set_shader_parameter("u_star", look["star"])
 		sky_mat.set_shader_parameter("u_sun", look.get("sun", 0.0))
 		if moon:

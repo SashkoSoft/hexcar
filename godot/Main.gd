@@ -55,9 +55,14 @@ var DRAG_STEP := 45.0
 
 # ---- Камера ----
 var CAM_DIST_MIN := 350.0
-var CAM_DIST_MAX := 3500.0
-var CAM_PITCH_MIN := deg_to_rad(8.0)   # ближе к виду сбоку
-var CAM_PITCH_MAX := deg_to_rad(85.0)  # почти строго сверху
+var CAM_DIST_MAX := 5500.0
+var CAM_PITCH_MIN := deg_to_rad(3.0)   # почти строго сверху (длинный «ортофокус»)
+var CAM_PITCH_MAX := deg_to_rad(85.0)  # ближе к виду сбоку
+# пресет камеры «вид сверху»: длинный фокус (узкий FOV → почти ортогонально),
+# почти строго сверху, кадрируется так, чтобы было видно всё поле
+const CAM_TOP_FOV := 16.0
+const CAM_TOP_PITCH := 6.0   # градусов от вертикали
+const PANEL_W_PX := 220.0    # ширина правой панели «Оформление» (для сдвига кадра)
 
 # ======================================================================
 # Структуры данных
@@ -2547,15 +2552,38 @@ func _flash(s: String) -> void:
 
 func _build_camera() -> void:
 	cam = Camera3D.new()
-	cam.fov = 45.0
-	cam.far = 8000.0
+	cam.fov = CAM_TOP_FOV
+	cam.far = 9000.0
 	add_child(cam)
 	cam_pivot = Vector3(FIELD_W * 0.5, 0.0, FIELD_H * 0.5)
-	tgt_pivot = cam_pivot
-	tgt_yaw = cam_yaw
-	tgt_pitch = cam_pitch
-	tgt_dist = cam_dist
+	_apply_cam_top()
+	# на старте мгновенно встаём в пресет (без проезда камеры)
+	cam_pivot = tgt_pivot
+	cam_yaw = tgt_yaw
+	cam_pitch = tgt_pitch
+	cam_dist = tgt_dist
 	update_camera()
+
+# пресет «вид сверху»: длинный фокус + почти строго сверху, кадрируем так,
+# чтобы всё поле было в кадре (с учётом правой панели «Оформление»)
+func _apply_cam_top() -> void:
+	if cam == null:
+		return
+	cam.fov = CAM_TOP_FOV
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var aspect: float = vp.x / maxf(vp.y, 1.0)
+	var clearfrac: float = clampf((vp.x - PANEL_W_PX) / maxf(vp.x, 1.0), 0.5, 1.0)
+	# полувысота видимой зоны на земле: чтобы поле влезло и по высоте, и по ширине
+	# (справа панель «съедает» часть ширины — учитываем через clearfrac)
+	var half_h: float = maxf(FIELD_H * 0.5 * 1.08, FIELD_W / (2.0 * aspect * clearfrac))
+	var dist: float = half_h / tan(deg_to_rad(CAM_TOP_FOV) * 0.5)
+	# центр поля сдвигаем влево, чтобы оно не пряталось под правой панелью
+	var wpp: float = (2.0 * half_h) / maxf(vp.y, 1.0)   # мир на пиксель
+	var shift: float = (PANEL_W_PX * 0.5) * wpp
+	tgt_pivot = Vector3(FIELD_W * 0.5 - shift, 0.0, FIELD_H * 0.5)
+	tgt_yaw = 0.0
+	tgt_pitch = deg_to_rad(CAM_TOP_PITCH)
+	tgt_dist = clampf(dist, CAM_DIST_MIN, CAM_DIST_MAX)
 
 func update_camera() -> void:
 	if cam == null:
@@ -2864,6 +2892,18 @@ func _build_style_menu() -> void:
 		vb.add_child(sbtn)
 		season_buttons[sname] = sbtn
 	_update_season_buttons()
+	# --- камера ---
+	vb.add_child(HSeparator.new())
+	var camttl := Label.new()
+	camttl.text = "Камера"
+	camttl.add_theme_font_size_override("font_size", 13)
+	camttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(camttl)
+	var cam_top_btn := Button.new()
+	cam_top_btn.text = "Вид сверху"
+	cam_top_btn.custom_minimum_size = Vector2(165, 30)
+	cam_top_btn.pressed.connect(func(): _apply_cam_top())
+	vb.add_child(cam_top_btn)
 	vb.add_child(HSeparator.new())
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 5)

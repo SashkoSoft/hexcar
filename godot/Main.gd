@@ -198,12 +198,11 @@ var fx_rect: ColorRect
 var fx_mat: ShaderMaterial
 var style_fx_buttons := {}      # индекс -> Button
 
-# погода (переключаемая в меню) — экранный оверлей (вид сверху, частицы не видны)
+# погода (переключаемая в меню) — настоящие 3D-частицы, падают на карту
 var weather := 0                 # 0 нет · 1 дождь · 2 снег
 const WEATHER_NAMES := ["Нет", "Дождь", "Снег"]
-var weather_layer: CanvasLayer
-var weather_rect: ColorRect
-var weather_mat: ShaderMaterial
+var rain_ps: GPUParticles3D
+var snow_ps: GPUParticles3D
 var weather_btn: Button
 
 # камера (орбитальная, со сглаживанием как в Dorfromantik)
@@ -275,7 +274,7 @@ func _ready() -> void:
 	_build_camera()
 	_build_hover_marker()
 	_build_fx()
-	_build_weather()   # экранный оверлей погоды — после _build_fx, чтобы рисовался поверх стиля
+	_build_weather()   # 3D-частицы дождя/снега над полем
 	_build_ui()
 	_show_menu()
 	load_look()   # если есть сохранённые настройки на диске — применить их
@@ -2009,93 +2008,98 @@ func _build_environment() -> void:
 
 	_apply_look()   # применить текущий пресет к окружению
 
-const _WEATHER_SHADER := """
-shader_type canvas_item;
-render_mode blend_mix;
-
-uniform int u_mode = 0;          // 0 нет · 1 дождь · 2 снег
-uniform float u_amount = 1.0;
-
-float hash(float n){ return fract(sin(n) * 43758.5453123); }
-float hash2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-
-// один слой косых струй дождя
-float rain_layer(vec2 uv, float cols, float rows, float speed, float slant, float seed){
-	uv.x += uv.y * slant;                      // наклон струй
-	float gx = uv.x * cols;
-	float colid = floor(gx);
-	float fx = fract(gx);
-	float r = hash(colid * 1.7 + seed * 13.0);
-	float active = step(0.4, hash(colid * 3.1 + seed * 7.0));   // часть колонок пустая
-	float yphase = fract(uv.y * rows - (TIME * speed + r * 10.0));
-	// струя: яркая голова, гаснущий хвост вверх
-	float streak = smoothstep(0.0, 0.04, yphase) * (1.0 - smoothstep(0.04, 0.55, yphase));
-	float thin = 1.0 - smoothstep(0.0, 0.5, abs(fx - 0.5) * 2.0);
-	thin = pow(thin, 4.0);
-	return streak * thin * active;
-}
-
-// один слой падающих снежинок (uv уже с поправкой на соотношение сторон)
-float snow_layer(vec2 uv, float scale, float speed, float sway, float seed){
-	uv.y += TIME * speed;                          // падение
-	uv.x += sin(uv.y * 3.0 + seed) * sway;         // покачивание
-	uv *= scale;
-	vec2 id = floor(uv);
-	vec2 f = fract(uv) - 0.5;
-	float r = hash2(id + seed);
-	vec2 off = (vec2(hash2(id + seed + 3.1), hash2(id + seed + 7.7)) - 0.5) * 0.7;
-	float d = length(f - off);
-	float rad = 0.12 + 0.16 * r;
-	return smoothstep(rad, rad * 0.25, d) * (0.45 + 0.55 * r);
-}
-
-void fragment(){
-	vec2 uv = SCREEN_UV;
-	if (u_mode == 1){
-		float v = 0.0;
-		v += rain_layer(uv, 55.0,  6.0,  6.0, 0.10, 1.0) * 0.65;
-		v += rain_layer(uv, 85.0,  7.0,  8.5, 0.13, 2.0) * 0.55;
-		v += rain_layer(uv, 125.0, 8.0, 11.0, 0.16, 3.0) * 0.45;
-		v = clamp(v * u_amount, 0.0, 1.0);
-		COLOR = vec4(vec3(0.86, 0.91, 1.0), v * 0.7);
-	} else if (u_mode == 2){
-		float aspect = SCREEN_PIXEL_SIZE.y / SCREEN_PIXEL_SIZE.x;
-		uv.x *= aspect;
-		float v = 0.0;
-		v += snow_layer(uv, 11.0, 0.030, 0.10, 1.0) * 1.0;   // крупные, ближе, медленнее
-		v += snow_layer(uv, 18.0, 0.050, 0.08, 2.0) * 0.8;
-		v += snow_layer(uv, 28.0, 0.075, 0.06, 3.0) * 0.6;   // мелкие, дальше, быстрее
-		v = clamp(v * u_amount, 0.0, 1.0);
-		COLOR = vec4(vec3(1.0), v);
-	} else {
-		COLOR = vec4(0.0);
-	}
-}
-"""
-
 func _build_weather() -> void:
-	weather_layer = CanvasLayer.new()
-	weather_layer.layer = 0   # поверх 3D и пост-эффекта, но под UI (ui.layer = 1)
-	add_child(weather_layer)
-	var sh := Shader.new()
-	sh.code = _WEATHER_SHADER
-	weather_mat = ShaderMaterial.new()
-	weather_mat.shader = sh
-	weather_mat.set_shader_parameter("u_mode", 0)
-	weather_mat.set_shader_parameter("u_amount", 1.0)
-	weather_rect = ColorRect.new()
-	weather_rect.material = weather_mat
-	weather_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	weather_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	weather_rect.visible = false
-	weather_layer.add_child(weather_rect)
+	var cx := FIELD_W * 0.5
+	var cz := FIELD_H * 0.5
+	var ext_x := FIELD_W * 0.5 + 250.0
+	var ext_z := FIELD_H * 0.5 + 250.0
+	var top := 700.0
+
+	# --- ДОЖДЬ: вытянутые косые струи, быстро падают на землю ---
+	rain_ps = GPUParticles3D.new()
+	var rdrop := BoxMesh.new()
+	rdrop.size = Vector3(1.6, 55.0, 1.6)
+	var rmat := StandardMaterial3D.new()
+	rmat.albedo_color = Color(0.82, 0.88, 1.0, 0.55)
+	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rmat.emission_enabled = true
+	rmat.emission = Color(0.7, 0.8, 1.0)
+	rmat.emission_energy_multiplier = 0.6
+	rmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	rdrop.material = rmat
+	rain_ps.draw_pass_1 = rdrop
+	var rp := ParticleProcessMaterial.new()
+	rp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	rp.emission_box_extents = Vector3(ext_x, 1.0, ext_z)
+	rp.direction = Vector3(0.16, -1.0, 0.06)
+	rp.spread = 1.5
+	rp.gravity = Vector3(40.0, -1500.0, 15.0)
+	rp.initial_velocity_min = 950.0
+	rp.initial_velocity_max = 1150.0
+	rp.scale_min = 0.8
+	rp.scale_max = 1.4
+	rain_ps.process_material = rp
+	rain_ps.amount = 4200
+	rain_ps.lifetime = 0.7
+	rain_ps.preprocess = 0.7
+	rain_ps.fixed_fps = 0
+	rain_ps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rain_ps.position = Vector3(cx, top, cz)
+	# AABB видимости охватывает весь объём падения (иначе частицы у земли отсекаются)
+	rain_ps.visibility_aabb = AABB(Vector3(-ext_x, -top - 100.0, -ext_z), Vector3(2.0 * ext_x, top + 200.0, 2.0 * ext_z))
+	rain_ps.visible = false
+	rain_ps.emitting = false
+	add_child(rain_ps)
+
+	# --- СНЕГ: мелкие мягкие хлопья, медленно кружат и оседают ---
+	snow_ps = GPUParticles3D.new()
+	var flake := SphereMesh.new()
+	flake.radius = 2.8
+	flake.height = 5.6
+	flake.radial_segments = 6
+	flake.rings = 4
+	var smat := StandardMaterial3D.new()
+	smat.albedo_color = Color(1.0, 1.0, 1.0, 0.95)
+	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	smat.emission_enabled = true
+	smat.emission = Color(0.95, 0.97, 1.0)
+	smat.emission_energy_multiplier = 0.5
+	flake.material = smat
+	snow_ps.draw_pass_1 = flake
+	var sp := ParticleProcessMaterial.new()
+	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	sp.emission_box_extents = Vector3(ext_x, 1.0, ext_z)
+	sp.direction = Vector3(0.0, -1.0, 0.0)
+	sp.spread = 12.0
+	sp.gravity = Vector3(0.0, -45.0, 0.0)
+	sp.initial_velocity_min = 50.0
+	sp.initial_velocity_max = 85.0
+	sp.scale_min = 0.5
+	sp.scale_max = 1.4
+	sp.turbulence_enabled = true
+	sp.turbulence_noise_strength = 28.0
+	sp.turbulence_noise_scale = 1.4
+	snow_ps.process_material = sp
+	snow_ps.amount = 6500
+	snow_ps.lifetime = 6.0
+	snow_ps.preprocess = 6.0
+	snow_ps.fixed_fps = 0
+	snow_ps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	snow_ps.position = Vector3(cx, top, cz)
+	snow_ps.visibility_aabb = AABB(Vector3(-ext_x, -top - 100.0, -ext_z), Vector3(2.0 * ext_x, top + 200.0, 2.0 * ext_z))
+	snow_ps.visible = false
+	snow_ps.emitting = false
+	add_child(snow_ps)
 
 func set_weather(mode: int) -> void:
 	weather = (mode % WEATHER_NAMES.size() + WEATHER_NAMES.size()) % WEATHER_NAMES.size()
-	if weather_mat:
-		weather_mat.set_shader_parameter("u_mode", weather)
-	if weather_rect:
-		weather_rect.visible = weather != 0
+	if rain_ps:
+		rain_ps.visible = weather == 1
+		rain_ps.emitting = weather == 1
+	if snow_ps:
+		snow_ps.visible = weather == 2
+		snow_ps.emitting = weather == 2
 	_update_weather_btn()
 
 func _update_weather_btn() -> void:

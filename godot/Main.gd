@@ -256,7 +256,7 @@ var lib_autumn_bush: Array = []
 var lib_spring_tree: Array = [] # весенние деревья (свежая зелень + цветение)
 var proto_holder: Node3D        # скрытый родитель прототипов декора (вместо free)
 var ground: MeshInstance3D      # плоскость земли (трава ↔ снег по сезону)
-var grass_mat: StandardMaterial3D
+var grass_mat: ShaderMaterial
 var snow_white_mat: StandardMaterial3D   # общий матовый снег для шапок/сугробов
 var ground_mats := {}           # сезон → материал земли (ленивый кэш)
 var GREENS := [
@@ -1309,7 +1309,47 @@ func _seamless(noise: FastNoiseLite, x: int, y: int, sz: int) -> float:
 	var d := noise.get_noise_2d(x - sz, y - sz)
 	return a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c * (1 - fx) * fy + d * fx * fy
 
-func _make_grass_material() -> StandardMaterial3D:
+# земля как ShaderMaterial: тайлированная процедурная текстура + мягкое
+# растворение к краям (скруглённый квадрат), чтобы поле не выглядело резко
+# обрезанным прямоугольником, а плавно уходило в фон
+const GROUND_PAD := 360.0
+const GROUND_SHADER := """
+shader_type spatial;
+render_mode cull_back, depth_draw_opaque, diffuse_burley;
+uniform sampler2D tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform float rep = 1.0;
+uniform float rough = 1.0;
+uniform float solid = 0.8;   // доля полуразмера, остающаяся плотной; дальше — затухание
+void fragment() {
+	ALBEDO = texture(tex, UV * rep).rgb;
+	ROUGHNESS = rough;
+	METALLIC = 0.0;
+	vec2 q = abs(UV * 2.0 - 1.0);                       // 0 в центре .. 1 на краю
+	vec2 d = max(q - vec2(solid), vec2(0.0)) / max(1.0 - solid, 1e-4);
+	float sq = max(d.x, d.y);
+	float rd = length(d);
+	float e = mix(sq, rd, 0.5);                         // скруглённые углы
+	ALPHA = 1.0 - smoothstep(0.0, 1.0, e);
+}
+"""
+
+func _ground_solid() -> float:
+	# плотная зона = площадь плиток + небольшое кольцо травы, дальше тает к краю плоскости
+	var half := FIELD_W * 0.5 + GROUND_PAD
+	return (FIELD_W * 0.5 + 110.0) / half
+
+func _wrap_ground(tex: Texture2D, rep: float, rough: float) -> ShaderMaterial:
+	var sh := Shader.new()
+	sh.code = GROUND_SHADER
+	var m := ShaderMaterial.new()
+	m.shader = sh
+	m.set_shader_parameter("tex", tex)
+	m.set_shader_parameter("rep", rep)
+	m.set_shader_parameter("rough", rough)
+	m.set_shader_parameter("solid", _ground_solid())
+	return m
+
+func _make_grass_material() -> ShaderMaterial:
 	var sz := 256
 	var img := Image.create(sz, sz, false, Image.FORMAT_RGB8)
 	var coarse := FastNoiseLite.new()
@@ -1341,14 +1381,9 @@ func _make_grass_material() -> StandardMaterial3D:
 			c = Color8(0xcd, 0xe1, 0xb9)
 		img.set_pixel(x, y, c)
 	var tex := ImageTexture.create_from_image(img)
-	var m := StandardMaterial3D.new()
-	m.albedo_texture = tex
-	m.roughness = 1.0
-	var rep := (FIELD_W + 400.0) / 150.0
-	m.uv1_scale = Vector3(rep, rep, 1.0)
-	return m
+	return _wrap_ground(tex, (FIELD_W + 2.0 * GROUND_PAD) / 150.0, 1.0)
 
-func _make_snow_ground_material() -> StandardMaterial3D:
+func _make_snow_ground_material() -> ShaderMaterial:
 	var sz := 256
 	var img := Image.create(sz, sz, false, Image.FORMAT_RGB8)
 	var coarse := FastNoiseLite.new()
@@ -1368,14 +1403,9 @@ func _make_snow_ground_material() -> StandardMaterial3D:
 		var y := randi() % sz
 		img.set_pixel(x, y, Color(1.0, 1.0, 1.0) if randf() < 0.7 else Color(0.82, 0.88, 0.98))
 	var tex := ImageTexture.create_from_image(img)
-	var m := StandardMaterial3D.new()
-	m.albedo_texture = tex
-	m.roughness = 0.82
-	var rep := (FIELD_W + 400.0) / 150.0
-	m.uv1_scale = Vector3(rep, rep, 1.0)
-	return m
+	return _wrap_ground(tex, (FIELD_W + 2.0 * GROUND_PAD) / 150.0, 0.82)
 
-func _field_mat(base: Color, flecks: Array) -> StandardMaterial3D:
+func _field_mat(base: Color, flecks: Array) -> ShaderMaterial:
 	# обобщённый материал земли: шумовая основа + крапинки (для осени/весны)
 	var sz := 256
 	var img := Image.create(sz, sz, false, Image.FORMAT_RGB8)
@@ -1399,17 +1429,12 @@ func _field_mat(base: Color, flecks: Array) -> StandardMaterial3D:
 		var y := randi() % sz
 		img.set_pixel(x, y, flecks[randi() % flecks.size()])
 	var tex := ImageTexture.create_from_image(img)
-	var m := StandardMaterial3D.new()
-	m.albedo_texture = tex
-	m.roughness = 1.0
-	var rep := (FIELD_W + 400.0) / 150.0
-	m.uv1_scale = Vector3(rep, rep, 1.0)
-	return m
+	return _wrap_ground(tex, (FIELD_W + 2.0 * GROUND_PAD) / 150.0, 1.0)
 
-func _season_ground(s: String) -> StandardMaterial3D:
+func _season_ground(s: String) -> ShaderMaterial:
 	if ground_mats.has(s):
 		return ground_mats[s]
-	var m: StandardMaterial3D
+	var m: ShaderMaterial
 	match s:
 		"Зима":
 			m = _make_snow_ground_material()
@@ -2231,7 +2256,7 @@ func _build_environment() -> void:
 	# земля (трава ↔ снег по сезону)
 	ground = MeshInstance3D.new()
 	var pm := PlaneMesh.new()
-	pm.size = Vector2(FIELD_W + 400.0, FIELD_H + 400.0)
+	pm.size = Vector2(FIELD_W + 2.0 * GROUND_PAD, FIELD_H + 2.0 * GROUND_PAD)
 	ground.mesh = pm
 	grass_mat = _make_grass_material()
 	ground.material_override = grass_mat
@@ -2239,6 +2264,46 @@ func _build_environment() -> void:
 	add_child(ground)
 
 	_apply_look()   # применить текущий пресет к окружению
+
+# шейдер частиц погоды: мягко гасит прозрачность к краям столба эмиссии,
+# чтобы дождь/снег не обрывались резким прямоугольником (скруглённая маска)
+const WEATHER_SHADER := """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_opaque, blend_mix;
+uniform vec4 base_color : source_color;
+uniform vec3 emit : source_color;
+uniform float emit_energy = 1.0;
+uniform vec2 center;
+uniform vec2 half_ext;
+uniform float inner = 0.82;
+uniform float outer = 1.18;
+varying vec2 wxz;
+void vertex() {
+	wxz = (MODEL_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xz;
+}
+void fragment() {
+	vec2 n = abs(wxz - center) / half_ext;
+	float sq = max(n.x, n.y);          // квадратная метрика
+	float rd = length(n);              // круговая метрика
+	float e = mix(sq, rd, 0.5);        // скруглённый квадрат — без острых углов
+	float fade = 1.0 - smoothstep(inner, outer, e);
+	ALBEDO = base_color.rgb;
+	EMISSION = emit * emit_energy;
+	ALPHA = base_color.a * fade;
+}
+"""
+
+func _weather_mat(base: Color, emit: Color, emit_energy: float, cx: float, cz: float, hx: float, hz: float) -> ShaderMaterial:
+	var sh := Shader.new()
+	sh.code = WEATHER_SHADER
+	var m := ShaderMaterial.new()
+	m.shader = sh
+	m.set_shader_parameter("base_color", base)
+	m.set_shader_parameter("emit", Vector3(emit.r, emit.g, emit.b))
+	m.set_shader_parameter("emit_energy", emit_energy)
+	m.set_shader_parameter("center", Vector2(cx, cz))
+	m.set_shader_parameter("half_ext", Vector2(hx, hz))
+	return m
 
 func _build_weather() -> void:
 	var cx := FIELD_W * 0.5
@@ -2252,16 +2317,8 @@ func _build_weather() -> void:
 	# --- ДОЖДЬ: вытянутые косые струи, быстро падают на землю ---
 	rain_ps = GPUParticles3D.new()
 	var rdrop := BoxMesh.new()
-	rdrop.size = Vector3(0.45, 24.0, 0.45)
-	var rmat := StandardMaterial3D.new()
-	rmat.albedo_color = Color(0.82, 0.88, 1.0, 0.55)
-	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rmat.emission_enabled = true
-	rmat.emission = Color(0.7, 0.8, 1.0)
-	rmat.emission_energy_multiplier = 0.6
-	rmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	rdrop.material = rmat
+	rdrop.size = Vector3(0.22, 12.0, 0.22)   # вдвое тоньше/короче
+	rdrop.material = _weather_mat(Color(0.82, 0.88, 1.0, 0.55), Color(0.7, 0.8, 1.0), 0.6, cx, cz, ext_x, ext_z)
 	rain_ps.draw_pass_1 = rdrop
 	var rp := ParticleProcessMaterial.new()
 	rp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
@@ -2274,7 +2331,7 @@ func _build_weather() -> void:
 	rp.scale_min = 0.5
 	rp.scale_max = 0.85
 	rain_ps.process_material = rp
-	rain_ps.amount = 4200
+	rain_ps.amount = 8400        # вдвое гуще
 	rain_ps.lifetime = 0.7
 	rain_ps.preprocess = 0.7
 	rain_ps.fixed_fps = 0
@@ -2286,20 +2343,14 @@ func _build_weather() -> void:
 	rain_ps.emitting = false
 	add_child(rain_ps)
 
-	# --- СНЕГ: мелкие мягкие хлопья, медленно кружат и оседают ---
+	# --- СНЕГ: мелкие мягкие хлопья, заметно падают и слегка кружат ---
 	snow_ps = GPUParticles3D.new()
 	var flake := SphereMesh.new()
-	flake.radius = 1.1
-	flake.height = 2.2
+	flake.radius = 0.55     # вдвое мельче
+	flake.height = 1.1
 	flake.radial_segments = 6
 	flake.rings = 4
-	var smat := StandardMaterial3D.new()
-	smat.albedo_color = Color(1.0, 1.0, 1.0, 0.95)
-	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	smat.emission_enabled = true
-	smat.emission = Color(0.95, 0.97, 1.0)
-	smat.emission_energy_multiplier = 0.5
-	flake.material = smat
+	flake.material = _weather_mat(Color(1.0, 1.0, 1.0, 0.95), Color(0.95, 0.97, 1.0), 0.5, cx, cz, ext_x, ext_z)
 	snow_ps.draw_pass_1 = flake
 	var sp := ParticleProcessMaterial.new()
 	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
@@ -2308,11 +2359,11 @@ func _build_weather() -> void:
 	sp.emission_box_extents = Vector3(ext_x, snow_mid, ext_z)
 	sp.direction = Vector3(0.05, -1.0, 0.03)
 	sp.spread = 8.0
-	# почти без ускорения — равномерное оседание (как терминальная скорость снега),
-	# но скорость заметная, чтобы снег явно падал, а не висел
-	sp.gravity = Vector3(0.0, -14.0, 0.0)
-	sp.initial_velocity_min = 95.0
-	sp.initial_velocity_max = 140.0
+	# заметная скорость + умеренное ускорение — снег явно стремится вниз,
+	# но всё ещё достаточно равномерен по высоте столба
+	sp.gravity = Vector3(0.0, -30.0, 0.0)
+	sp.initial_velocity_min = 180.0
+	sp.initial_velocity_max = 250.0
 	sp.scale_min = 0.5
 	sp.scale_max = 0.95
 	# слабая турбулентность — только лёгкое покачивание, не мешает падению

@@ -2346,7 +2346,7 @@ func _build_weather() -> void:
 	rp.scale_min = 0.5
 	rp.scale_max = 0.85
 	rain_ps.process_material = rp
-	rain_ps.amount = 8400        # вдвое гуще
+	rain_ps.amount = 16800       # ещё вдвое гуще
 	rain_ps.lifetime = 0.7
 	rain_ps.preprocess = 0.7
 	rain_ps.fixed_fps = 0
@@ -2452,6 +2452,9 @@ func _apply_look() -> void:
 		var amb_c: Color = look["ambient_color"] * g["amb"] * float(look["ambient_energy"])
 		var dir_c: Color = look["moon_color"] * g["light"] * float(look["moon_energy"]) * 0.30
 		var lit := Color(gb.r * (amb_c.r + dir_c.r), gb.g * (amb_c.g + dir_c.g), gb.b * (amb_c.b + dir_c.b))
+		# фон чуть темнее и насыщеннее по цвету, чем сама земля
+		lit.s = clampf(lit.s * 1.35, 0.0, 1.0)
+		lit = lit.darkened(0.18)
 		sky_mat.set_shader_parameter("u_sky_horizon", _v3(lit))
 		sky_mat.set_shader_parameter("u_star", look["star"])
 		sky_mat.set_shader_parameter("u_sun", look.get("sun", 0.0))

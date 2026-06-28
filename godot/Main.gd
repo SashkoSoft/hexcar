@@ -1310,35 +1310,37 @@ func _seamless(noise: FastNoiseLite, x: int, y: int, sz: int) -> float:
 	return a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c * (1 - fx) * fy + d * fx * fy
 
 # земля как ShaderMaterial: тайлированная процедурная текстура + мягкое
-# растворение к краям (скруглённый квадрат), чтобы поле не выглядело резко
-# обрезанным прямоугольником, а плавно уходило в фон
-const GROUND_PAD := 360.0
-const GROUND_FADE := 130.0   # ширина мягкого края у самой кромки плоскости (узкая полоса)
+# ЭЛЛИПТИЧЕСКОЕ растворение вокруг игрового поля. Земля плотная только над
+# зоной плиток, а дальше широко и КРУГЛО (не квадратом) уходит в прозрачность —
+# на виде сверху нет ни прямоугольного «острова» статичной земли, ни резкой кромки.
+# Изолинии — эллипсы (нормируем смещение от центра на полуразмер поля), поэтому
+# на виде сверху переход не квадратный. Плоскость заметно больше поля, чтобы
+# затухание ушло в 0 ещё ДО её прямоугольного края — самой кромки не видно.
+const GROUND_FADE_START := 1.05   # доля поля: до сюда земля плотная (вплотную к кромке поля)
+const GROUND_FADE_END := 1.95     # здесь земля полностью растворилась в фон
 const GROUND_SHADER := """
 shader_type spatial;
 render_mode cull_back, depth_draw_opaque, diffuse_burley;
 uniform sampler2D tex : source_color, filter_linear_mipmap, repeat_enable;
-uniform float rep = 1.0;
+uniform vec2 rep = vec2(1.0);
 uniform float rough = 1.0;
-uniform float solid = 0.8;   // доля полуразмера, остающаяся плотной; дальше — затухание
+uniform vec2 plane_size = vec2(1.0);
+uniform vec2 field_half = vec2(1.0);
+uniform float fade_start = 1.05;
+uniform float fade_end = 1.95;
 void fragment() {
 	ALBEDO = texture(tex, UV * rep).rgb;
 	ROUGHNESS = rough;
 	METALLIC = 0.0;
-	vec2 q = abs(UV * 2.0 - 1.0);                       // 0 в центре .. 1 на краю
-	vec2 d = max(q - vec2(solid), vec2(0.0)) / max(1.0 - solid, 1e-4);
-	float sq = max(d.x, d.y);
-	float rd = length(d);
-	float e = mix(sq, rd, 0.5);                         // скруглённые углы
-	ALPHA = 1.0 - smoothstep(0.0, 1.0, e);
+	vec2 off = (UV - 0.5) * plane_size;   // смещение от центра поля (мир)
+	vec2 n = off / field_half;            // 1.0 на середине кромки поля
+	float d = length(n);                  // эллиптические изолинии — без углов/квадрата
+	ALPHA = 1.0 - smoothstep(fade_start, fade_end, d);
 }
 """
 
-func _ground_solid() -> float:
-	# плотная зона почти до самой кромки плоскости; затухание — узкая полоса у края,
-	# т.е. ближняя граница перехода придвинута вплотную к краю карты
-	var half := FIELD_W * 0.5 + GROUND_PAD
-	return clampf((half - GROUND_FADE) / half, 0.0, 0.999)
+func _ground_plane_size() -> Vector2:
+	return Vector2(FIELD_W * GROUND_FADE_END + 200.0, FIELD_H * GROUND_FADE_END + 200.0)
 
 # базовый цвет земли сезона — фон у кромки подгоняется под него
 func _ground_base_color(s: String) -> Color:
@@ -1348,15 +1350,19 @@ func _ground_base_color(s: String) -> Color:
 		"Весна": return Color8(0x6f, 0xc0, 0x52)
 		_: return GRASS_COL
 
-func _wrap_ground(tex: Texture2D, rep: float, rough: float) -> ShaderMaterial:
+func _wrap_ground(tex: Texture2D, rough: float) -> ShaderMaterial:
+	var ps := _ground_plane_size()
 	var sh := Shader.new()
 	sh.code = GROUND_SHADER
 	var m := ShaderMaterial.new()
 	m.shader = sh
 	m.set_shader_parameter("tex", tex)
-	m.set_shader_parameter("rep", rep)
+	m.set_shader_parameter("rep", ps / 150.0)
 	m.set_shader_parameter("rough", rough)
-	m.set_shader_parameter("solid", _ground_solid())
+	m.set_shader_parameter("plane_size", ps)
+	m.set_shader_parameter("field_half", Vector2(FIELD_W * 0.5, FIELD_H * 0.5))
+	m.set_shader_parameter("fade_start", GROUND_FADE_START)
+	m.set_shader_parameter("fade_end", GROUND_FADE_END)
 	return m
 
 func _make_grass_material() -> ShaderMaterial:
@@ -1391,7 +1397,7 @@ func _make_grass_material() -> ShaderMaterial:
 			c = Color8(0xcd, 0xe1, 0xb9)
 		img.set_pixel(x, y, c)
 	var tex := ImageTexture.create_from_image(img)
-	return _wrap_ground(tex, (FIELD_W + 2.0 * GROUND_PAD) / 150.0, 1.0)
+	return _wrap_ground(tex, 1.0)
 
 func _make_snow_ground_material() -> ShaderMaterial:
 	var sz := 256
@@ -1413,7 +1419,7 @@ func _make_snow_ground_material() -> ShaderMaterial:
 		var y := randi() % sz
 		img.set_pixel(x, y, Color(1.0, 1.0, 1.0) if randf() < 0.7 else Color(0.82, 0.88, 0.98))
 	var tex := ImageTexture.create_from_image(img)
-	return _wrap_ground(tex, (FIELD_W + 2.0 * GROUND_PAD) / 150.0, 0.82)
+	return _wrap_ground(tex, 0.82)
 
 func _field_mat(base: Color, flecks: Array) -> ShaderMaterial:
 	# обобщённый материал земли: шумовая основа + крапинки (для осени/весны)
@@ -1439,7 +1445,7 @@ func _field_mat(base: Color, flecks: Array) -> ShaderMaterial:
 		var y := randi() % sz
 		img.set_pixel(x, y, flecks[randi() % flecks.size()])
 	var tex := ImageTexture.create_from_image(img)
-	return _wrap_ground(tex, (FIELD_W + 2.0 * GROUND_PAD) / 150.0, 1.0)
+	return _wrap_ground(tex, 1.0)
 
 func _season_ground(s: String) -> ShaderMaterial:
 	if ground_mats.has(s):
@@ -2266,7 +2272,7 @@ func _build_environment() -> void:
 	# земля (трава ↔ снег по сезону)
 	ground = MeshInstance3D.new()
 	var pm := PlaneMesh.new()
-	pm.size = Vector2(FIELD_W + 2.0 * GROUND_PAD, FIELD_H + 2.0 * GROUND_PAD)
+	pm.size = _ground_plane_size()
 	ground.mesh = pm
 	grass_mat = _make_grass_material()
 	ground.material_override = grass_mat
@@ -2275,8 +2281,9 @@ func _build_environment() -> void:
 
 	_apply_look()   # применить текущий пресет к окружению
 
-# шейдер частиц погоды: мягко гасит прозрачность к краям столба эмиссии,
-# чтобы дождь/снег не обрывались резким прямоугольником (скруглённая маска)
+# шейдер частиц погоды: мягко гасит прозрачность к краям поля по ЭЛЛИПТИЧЕСКОЙ
+# маске (нормировка на полуразмер поля) — на виде сверху дождь/снег круглo
+# растворяются вокруг поля, без резкого квадрата
 const WEATHER_SHADER := """
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_opaque, blend_mix;
@@ -2285,18 +2292,16 @@ uniform vec3 emit : source_color;
 uniform float emit_energy = 1.0;
 uniform vec2 center;
 uniform vec2 half_ext;
-uniform float inner = 0.82;
-uniform float outer = 1.18;
+uniform float inner = 0.90;
+uniform float outer = 1.33;
 varying vec2 wxz;
 void vertex() {
 	wxz = (MODEL_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xz;
 }
 void fragment() {
-	vec2 n = abs(wxz - center) / half_ext;
-	float sq = max(n.x, n.y);          // квадратная метрика
-	float rd = length(n);              // круговая метрика
-	float e = mix(sq, rd, 0.5);        // скруглённый квадрат — без острых углов
-	float fade = 1.0 - smoothstep(inner, outer, e);
+	vec2 n = (wxz - center) / half_ext;
+	float d = length(n);               // эллиптические изолинии — без углов/квадрата
+	float fade = 1.0 - smoothstep(inner, outer, d);
 	ALBEDO = base_color.rgb;
 	EMISSION = emit * emit_energy;
 	ALPHA = base_color.a * fade;
@@ -2328,7 +2333,7 @@ func _build_weather() -> void:
 	rain_ps = GPUParticles3D.new()
 	var rdrop := BoxMesh.new()
 	rdrop.size = Vector3(0.22, 12.0, 0.22)   # вдвое тоньше/короче
-	rdrop.material = _weather_mat(Color(0.82, 0.88, 1.0, 0.55), Color(0.7, 0.8, 1.0), 0.6, cx, cz, ext_x, ext_z)
+	rdrop.material = _weather_mat(Color(0.82, 0.88, 1.0, 0.55), Color(0.7, 0.8, 1.0), 0.6, cx, cz, FIELD_W * 0.5, FIELD_H * 0.5)
 	rain_ps.draw_pass_1 = rdrop
 	var rp := ParticleProcessMaterial.new()
 	rp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
@@ -2360,7 +2365,7 @@ func _build_weather() -> void:
 	flake.height = 1.1
 	flake.radial_segments = 6
 	flake.rings = 4
-	flake.material = _weather_mat(Color(1.0, 1.0, 1.0, 0.95), Color(0.95, 0.97, 1.0), 0.5, cx, cz, ext_x, ext_z)
+	flake.material = _weather_mat(Color(1.0, 1.0, 1.0, 0.95), Color(0.95, 0.97, 1.0), 0.5, cx, cz, FIELD_W * 0.5, FIELD_H * 0.5)
 	snow_ps.draw_pass_1 = flake
 	var sp := ParticleProcessMaterial.new()
 	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX

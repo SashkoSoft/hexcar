@@ -198,12 +198,13 @@ var fx_rect: ColorRect
 var fx_mat: ShaderMaterial
 var style_fx_buttons := {}      # индекс -> Button
 
-# дождь (отключаемый в меню) — экранный оверлей (вид сверху, частицы не видны)
-var rain_enabled := false
-var rain_layer2: CanvasLayer
-var rain_rect: ColorRect
-var rain_mat: ShaderMaterial
-var rain_btn: Button
+# погода (переключаемая в меню) — экранный оверлей (вид сверху, частицы не видны)
+var weather := 0                 # 0 нет · 1 дождь · 2 снег
+const WEATHER_NAMES := ["Нет", "Дождь", "Снег"]
+var weather_layer: CanvasLayer
+var weather_rect: ColorRect
+var weather_mat: ShaderMaterial
+var weather_btn: Button
 
 # камера (орбитальная, со сглаживанием как в Dorfromantik)
 var cam_pivot: Vector3                  # текущая (сглаженная) точка фокуса
@@ -274,7 +275,7 @@ func _ready() -> void:
 	_build_camera()
 	_build_hover_marker()
 	_build_fx()
-	_build_rain()   # экранный оверлей дождя — после _build_fx, чтобы рисовался поверх стиля
+	_build_weather()   # экранный оверлей погоды — после _build_fx, чтобы рисовался поверх стиля
 	_build_ui()
 	_show_menu()
 	load_look()   # если есть сохранённые настройки на диске — применить их
@@ -2008,13 +2009,15 @@ func _build_environment() -> void:
 
 	_apply_look()   # применить текущий пресет к окружению
 
-const _RAIN_SHADER := """
+const _WEATHER_SHADER := """
 shader_type canvas_item;
 render_mode blend_mix;
 
+uniform int u_mode = 0;          // 0 нет · 1 дождь · 2 снег
 uniform float u_amount = 1.0;
 
 float hash(float n){ return fract(sin(n) * 43758.5453123); }
+float hash2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
 // один слой косых струй дождя
 float rain_layer(vec2 uv, float cols, float rows, float speed, float slant, float seed){
@@ -2032,43 +2035,73 @@ float rain_layer(vec2 uv, float cols, float rows, float speed, float slant, floa
 	return streak * thin * active;
 }
 
+// один слой падающих снежинок (uv уже с поправкой на соотношение сторон)
+float snow_layer(vec2 uv, float scale, float speed, float sway, float seed){
+	uv.y += TIME * speed;                          // падение
+	uv.x += sin(uv.y * 3.0 + seed) * sway;         // покачивание
+	uv *= scale;
+	vec2 id = floor(uv);
+	vec2 f = fract(uv) - 0.5;
+	float r = hash2(id + seed);
+	vec2 off = (vec2(hash2(id + seed + 3.1), hash2(id + seed + 7.7)) - 0.5) * 0.7;
+	float d = length(f - off);
+	float rad = 0.12 + 0.16 * r;
+	return smoothstep(rad, rad * 0.25, d) * (0.45 + 0.55 * r);
+}
+
 void fragment(){
 	vec2 uv = SCREEN_UV;
-	float v = 0.0;
-	v += rain_layer(uv, 55.0,  6.0,  6.0, 0.10, 1.0) * 0.65;
-	v += rain_layer(uv, 85.0,  7.0,  8.5, 0.13, 2.0) * 0.55;
-	v += rain_layer(uv, 125.0, 8.0, 11.0, 0.16, 3.0) * 0.45;
-	v = clamp(v * u_amount, 0.0, 1.0);
-	COLOR = vec4(vec3(0.86, 0.91, 1.0), v * 0.7);
+	if (u_mode == 1){
+		float v = 0.0;
+		v += rain_layer(uv, 55.0,  6.0,  6.0, 0.10, 1.0) * 0.65;
+		v += rain_layer(uv, 85.0,  7.0,  8.5, 0.13, 2.0) * 0.55;
+		v += rain_layer(uv, 125.0, 8.0, 11.0, 0.16, 3.0) * 0.45;
+		v = clamp(v * u_amount, 0.0, 1.0);
+		COLOR = vec4(vec3(0.86, 0.91, 1.0), v * 0.7);
+	} else if (u_mode == 2){
+		float aspect = SCREEN_PIXEL_SIZE.y / SCREEN_PIXEL_SIZE.x;
+		uv.x *= aspect;
+		float v = 0.0;
+		v += snow_layer(uv, 11.0, 0.030, 0.10, 1.0) * 1.0;   // крупные, ближе, медленнее
+		v += snow_layer(uv, 18.0, 0.050, 0.08, 2.0) * 0.8;
+		v += snow_layer(uv, 28.0, 0.075, 0.06, 3.0) * 0.6;   // мелкие, дальше, быстрее
+		v = clamp(v * u_amount, 0.0, 1.0);
+		COLOR = vec4(vec3(1.0), v);
+	} else {
+		COLOR = vec4(0.0);
+	}
 }
 """
 
-func _build_rain() -> void:
-	rain_layer2 = CanvasLayer.new()
-	rain_layer2.layer = 0   # поверх 3D и пост-эффекта, но под UI (ui.layer = 1)
-	add_child(rain_layer2)
+func _build_weather() -> void:
+	weather_layer = CanvasLayer.new()
+	weather_layer.layer = 0   # поверх 3D и пост-эффекта, но под UI (ui.layer = 1)
+	add_child(weather_layer)
 	var sh := Shader.new()
-	sh.code = _RAIN_SHADER
-	rain_mat = ShaderMaterial.new()
-	rain_mat.shader = sh
-	rain_mat.set_shader_parameter("u_amount", 1.0)
-	rain_rect = ColorRect.new()
-	rain_rect.material = rain_mat
-	rain_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	rain_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rain_rect.visible = false
-	rain_layer2.add_child(rain_rect)
+	sh.code = _WEATHER_SHADER
+	weather_mat = ShaderMaterial.new()
+	weather_mat.shader = sh
+	weather_mat.set_shader_parameter("u_mode", 0)
+	weather_mat.set_shader_parameter("u_amount", 1.0)
+	weather_rect = ColorRect.new()
+	weather_rect.material = weather_mat
+	weather_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	weather_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	weather_rect.visible = false
+	weather_layer.add_child(weather_rect)
 
-func toggle_rain(on: bool) -> void:
-	rain_enabled = on
-	if rain_rect:
-		rain_rect.visible = on
-	_update_rain_btn()
+func set_weather(mode: int) -> void:
+	weather = (mode % WEATHER_NAMES.size() + WEATHER_NAMES.size()) % WEATHER_NAMES.size()
+	if weather_mat:
+		weather_mat.set_shader_parameter("u_mode", weather)
+	if weather_rect:
+		weather_rect.visible = weather != 0
+	_update_weather_btn()
 
-func _update_rain_btn() -> void:
-	if rain_btn:
-		rain_btn.text = "Дождь: вкл" if rain_enabled else "Дождь: выкл"
-		rain_btn.modulate = Color(0.6, 0.8, 1.0) if rain_enabled else Color(1, 1, 1)
+func _update_weather_btn() -> void:
+	if weather_btn:
+		weather_btn.text = "Погода: " + WEATHER_NAMES[weather]
+		weather_btn.modulate = Color(0.6, 0.8, 1.0) if weather != 0 else Color(1, 1, 1)
 
 func _v3(c: Color) -> Vector3:
 	return Vector3(c.r, c.g, c.b)
@@ -2467,11 +2500,11 @@ func _build_style_menu() -> void:
 	row.add_child(load_btn)
 	# --- погода ---
 	vb.add_child(HSeparator.new())
-	rain_btn = Button.new()
-	rain_btn.custom_minimum_size = Vector2(165, 30)
-	rain_btn.pressed.connect(func(): toggle_rain(not rain_enabled))
-	vb.add_child(rain_btn)
-	_update_rain_btn()
+	weather_btn = Button.new()
+	weather_btn.custom_minimum_size = Vector2(165, 30)
+	weather_btn.pressed.connect(func(): set_weather(weather + 1))
+	vb.add_child(weather_btn)
+	_update_weather_btn()
 	# --- переключатель художественного стиля ---
 	vb.add_child(HSeparator.new())
 	var stitle := Label.new()

@@ -2014,7 +2014,8 @@ func _build_weather() -> void:
 	var ext_x := FIELD_W * 0.5 + 250.0
 	var ext_z := FIELD_H * 0.5 + 250.0
 	var top := 700.0        # высота спавна дождя
-	var snow_top := 480.0   # снег спавнится ниже — успевает долететь до земли
+	var snow_h := 520.0     # снег рождается во всём столбе от земли до этой высоты
+	var snow_mid := snow_h * 0.5
 
 	# --- ДОЖДЬ: вытянутые косые струи, быстро падают на землю ---
 	rain_ps = GPUParticles3D.new()
@@ -2070,12 +2071,15 @@ func _build_weather() -> void:
 	snow_ps.draw_pass_1 = flake
 	var sp := ParticleProcessMaterial.new()
 	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	sp.emission_box_extents = Vector3(ext_x, 1.0, ext_z)
+	# хлопья рождаются равномерно по всей высоте столба — поэтому снег виден
+	# одинаково и у земли, и наверху, а не тонким слоем у точки спавна
+	sp.emission_box_extents = Vector3(ext_x, snow_mid, ext_z)
 	sp.direction = Vector3(0.05, -1.0, 0.03)
 	sp.spread = 8.0
-	sp.gravity = Vector3(0.0, -60.0, 0.0)
-	sp.initial_velocity_min = 60.0
-	sp.initial_velocity_max = 90.0
+	# почти без ускорения — равномерное оседание (как терминальная скорость снега)
+	sp.gravity = Vector3(0.0, -8.0, 0.0)
+	sp.initial_velocity_min = 55.0
+	sp.initial_velocity_max = 80.0
 	sp.scale_min = 0.4
 	sp.scale_max = 0.8
 	# слабая турбулентность — только лёгкое покачивание, не мешает падению
@@ -2084,12 +2088,13 @@ func _build_weather() -> void:
 	sp.turbulence_noise_scale = 1.2
 	snow_ps.process_material = sp
 	snow_ps.amount = 16000
-	snow_ps.lifetime = 11.0
-	snow_ps.preprocess = 11.0
+	snow_ps.lifetime = 9.0
+	snow_ps.preprocess = 9.0
 	snow_ps.fixed_fps = 0
 	snow_ps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	snow_ps.position = Vector3(cx, snow_top, cz)
-	snow_ps.visibility_aabb = AABB(Vector3(-ext_x, -snow_top - 100.0, -ext_z), Vector3(2.0 * ext_x, snow_top + 200.0, 2.0 * ext_z))
+	snow_ps.position = Vector3(cx, snow_mid, cz)
+	# AABB от заметно ниже земли до верха столба — чтобы ничего не отсекалось
+	snow_ps.visibility_aabb = AABB(Vector3(-ext_x, -snow_mid - 400.0, -ext_z), Vector3(2.0 * ext_x, snow_h + 600.0, 2.0 * ext_z))
 	snow_ps.visible = false
 	snow_ps.emitting = false
 	add_child(snow_ps)

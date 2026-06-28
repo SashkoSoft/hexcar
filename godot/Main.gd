@@ -1423,14 +1423,14 @@ func _build_decor(t: Tile) -> void:
 	var gc := []
 	var gp := 0
 	var gg := 0
-	while gp < 600 and gg < 5000:
+	while gp < 1200 and gg < 10000:
 		gg += 1
 		var a := randf() * TAU
 		var rad := sqrt(randf()) * A * 1.03
 		var x := cos(a) * rad
 		var y := sin(a) * rad
 		if _dist_to_roads(x, y) - HW > 1.0:
-			var tsc := 0.7 + randf() * 1.0
+			var tsc := 0.35 + randf() * 0.5
 			var tb := Basis(Vector3.UP, randf() * TAU).scaled(Vector3.ONE * tsc)
 			gx.append(Transform3D(tb, Vector3(x, 0, y)))
 			gc.append(GREENS[randi() % GREENS.size()])
@@ -1452,14 +1452,14 @@ func _build_decor(t: Tile) -> void:
 	# много разных цветочков по всей траве
 	var placed := 0
 	var guard := 0
-	while placed < 14 and guard < 600:
+	while placed < 28 and guard < 1200:
 		guard += 1
 		var a := randf() * TAU
 		var rad := sqrt(randf()) * A * 0.98
 		var x := cos(a) * rad
 		var y := sin(a) * rad
 		if _dist_to_roads(x, y) - HW > 2.0:
-			items.append({"type": "flower", "x": x, "y": y, "sc": 0.85 + randf() * 0.8, "rot": randf() * TAU})
+			items.append({"type": "flower", "x": x, "y": y, "sc": 0.425 + randf() * 0.4, "rot": randf() * TAU})
 			placed += 1
 	# камешки вдоль дороги
 	placed = 0

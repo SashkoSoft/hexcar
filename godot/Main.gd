@@ -2459,7 +2459,7 @@ func _apply_look() -> void:
 		var lit := Color(gb.r * (amb_c.r + dir_c.r), gb.g * (amb_c.g + dir_c.g), gb.b * (amb_c.b + dir_c.b))
 		# фон чуть темнее и насыщеннее по цвету, чем сама земля
 		lit.s = clampf(lit.s * 1.35, 0.0, 1.0)
-		lit = lit.darkened(0.26)   # ещё ~10% темнее
+		lit = lit.darkened(0.48)   # фон заметно темнее земли
 		sky_mat.set_shader_parameter("u_sky_horizon", _v3(lit))
 		sky_mat.set_shader_parameter("u_star", look["star"])
 		sky_mat.set_shader_parameter("u_sun", look.get("sun", 0.0))

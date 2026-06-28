@@ -71,6 +71,9 @@ class Tile:
 	var pivot: Node3D
 	var target_yaw: float
 	var roads: Array = []   # 3 MeshInstance3D дорог (для подсветки)
+	var summer: Node3D      # контейнер летнего декора (трава/цветы/деревья)
+	var winter: Node3D      # контейнер зимнего декора (строится лениво при первой зиме)
+	var items: Array = []   # сохранённый список декора (чтобы собрать зимнюю версию)
 
 class Car:
 	var ti: int = 0
@@ -176,6 +179,18 @@ var PRESETS := {
 		"tonemap": "agx", "exposure": 0.95, "contrast": 1.15, "saturation": 1.08, "brightness": 1.0,
 		"sun": 1.0,
 	},
+	"Зима": {
+		# холодный пасмурно-ясный день: голубоватое небо, прохладный свет
+		"ambient_color": Color(0.62, 0.70, 0.82), "ambient_energy": 0.55,
+		"moon_color": Color(0.86, 0.92, 1.0), "moon_energy": 1.5,
+		"glow_intensity": 0.35, "glow_bloom": 0.10, "glow_threshold": 1.0,
+		"sky_top": Color(0.40, 0.55, 0.78), "sky_horizon": Color(0.80, 0.86, 0.93), "star": 0.0,
+		"hl_energy": 6.0, "hl_range": 200.0, "hl_angle": 30.0, "hl_color": Color(0.92, 0.96, 1.0),
+		"highlight_emission": 0.8,
+		"tonemap": "agx", "exposure": 1.0, "contrast": 1.08, "saturation": 0.92, "brightness": 1.04,
+		"sun": 0.85,
+		"winter": true,   # включает заснеженное поле и снегопад
+	},
 }
 var flash_label: Label
 var flash_t := 0.0
@@ -246,6 +261,13 @@ var lib_flower: Array = []
 var lib_bush: Array = []
 var lib_tree: Array = []
 var lib_rock: Array = []
+var lib_snow_tree: Array = []   # зимние деревья «в снегу» (строятся лениво)
+var lib_snow_mound: Array = []  # сугробы/заснеженные кусты-камни
+var ground: MeshInstance3D      # плоскость земли (трава ↔ снег)
+var grass_mat: StandardMaterial3D
+var snow_ground_mat: StandardMaterial3D
+var snow_white_mat: StandardMaterial3D   # общий матовый снег для шапок/сугробов
+var winter_on := false
 var GREENS := [
 	Color8(0x3f, 0x7a, 0x36), Color8(0x35, 0x6b, 0x2e), Color8(0x48, 0x7f, 0x3a),
 	Color8(0x2f, 0x6b, 0x2c), Color8(0x5a, 0x9a, 0x3e), Color8(0x6f, 0xb8, 0x5f),
@@ -1306,6 +1328,33 @@ func _make_grass_material() -> StandardMaterial3D:
 	m.uv1_scale = Vector3(rep, rep, 1.0)
 	return m
 
+func _make_snow_ground_material() -> StandardMaterial3D:
+	var sz := 256
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGB8)
+	var coarse := FastNoiseLite.new()
+	coarse.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	coarse.frequency = 0.012
+	coarse.seed = randi()
+	var base := Color(0.90, 0.93, 0.98)   # снег с лёгкой голубизной
+	for yy in sz:
+		for xx in sz:
+			var s: float = clamp(_seamless(coarse, xx, yy, sz) * 0.5 + 0.5, 0.0, 1.0)
+			# мягкие сугробы: голубоватые впадины ↔ почти белые гребни
+			var col := base.darkened(0.10).lerp(Color(1.0, 1.0, 1.0), s)
+			img.set_pixel(xx, yy, col)
+	# редкие искорки-блёстки
+	for i in range(900):
+		var x := randi() % sz
+		var y := randi() % sz
+		img.set_pixel(x, y, Color(1.0, 1.0, 1.0) if randf() < 0.7 else Color(0.82, 0.88, 0.98))
+	var tex := ImageTexture.create_from_image(img)
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = tex
+	m.roughness = 0.82
+	var rep := (FIELD_W + 400.0) / 150.0
+	m.uv1_scale = Vector3(rep, rep, 1.0)
+	return m
+
 # ---- Вспомогательные конструкторы декора ----
 func _mi(mesh: Mesh, mat: Material, pos: Vector3, scl: Vector3, shadow: bool) -> MeshInstance3D:
 	var n := MeshInstance3D.new()
@@ -1396,8 +1445,81 @@ func _make_pine(green: Color) -> Node3D:
 	r.add_child(_mi(cone_mesh, get_mat(green.lightened(0.12)), Vector3(0, 28, 0), Vector3(5.4, 8, 5.4), true))
 	return r
 
+# ---- Зимний декор: деревья «в снегу», сугробы ----
+func _snowm() -> StandardMaterial3D:
+	if snow_white_mat == null:
+		snow_white_mat = StandardMaterial3D.new()
+		snow_white_mat.albedo_color = Color(0.95, 0.97, 1.0)
+		snow_white_mat.roughness = 0.85
+	return snow_white_mat
+
+func _make_snowy_round_tree(green: Color) -> Node3D:
+	var frost := green.lerp(Color(0.86, 0.90, 0.86), 0.45)   # подмороженная листва
+	var r := Node3D.new()
+	r.add_child(_mi(cyl_mesh, get_mat(TRUNK_COL), Vector3(0, 7.0, 0), Vector3(2.4, 14, 2.4), true))
+	r.add_child(_mi(sphere_mesh, get_mat(frost), Vector3(0, 18.0, 0), Vector3(11.5, 12.0, 11.5), true))
+	r.add_child(_mi(sphere_mesh, get_mat(frost.lightened(0.10)), Vector3(3.5, 22.0, 2.0), Vector3(7.2, 7.2, 7.2), true))
+	r.add_child(_mi(sphere_mesh, get_mat(frost.darkened(0.06)), Vector3(-3.8, 20.0, -2.2), Vector3(6.6, 6.6, 6.6), true))
+	# снежные шапки сверху (приплюснутые белые сферы)
+	r.add_child(_mi(sphere_mesh, _snowm(), Vector3(0, 22.5, 0), Vector3(10.5, 4.2, 10.5), true))
+	r.add_child(_mi(sphere_mesh, _snowm(), Vector3(3.5, 25.0, 2.0), Vector3(6.2, 3.0, 6.2), true))
+	r.add_child(_mi(sphere_mesh, _snowm(), Vector3(-3.8, 23.0, -2.2), Vector3(5.6, 2.8, 5.6), true))
+	return r
+
+func _make_snowy_pine(green: Color) -> Node3D:
+	var frost := green.lerp(Color(0.80, 0.86, 0.84), 0.40)
+	var r := Node3D.new()
+	r.add_child(_mi(cyl_mesh, get_mat(TRUNK_COL), Vector3(0, 5.0, 0), Vector3(2.0, 10, 2.0), true))
+	r.add_child(_mi(cone_mesh, get_mat(frost), Vector3(0, 15, 0), Vector3(11, 13, 11), true))
+	r.add_child(_mi(cone_mesh, _snowm(), Vector3(0, 17.5, 0), Vector3(11.4, 5.5, 11.4), true))
+	r.add_child(_mi(cone_mesh, get_mat(frost.lightened(0.05)), Vector3(0, 22, 0), Vector3(8, 11, 8), true))
+	r.add_child(_mi(cone_mesh, _snowm(), Vector3(0, 24.5, 0), Vector3(8.3, 4.5, 8.3), true))
+	r.add_child(_mi(cone_mesh, get_mat(frost.lightened(0.10)), Vector3(0, 28, 0), Vector3(5.4, 8, 5.4), true))
+	r.add_child(_mi(cone_mesh, _snowm(), Vector3(0, 31.0, 0), Vector3(5.8, 4.0, 5.8), true))
+	return r
+
+func _make_snow_mound() -> Node3D:
+	# небольшой сугроб — кучка приплюснутых белых сфер
+	var r := Node3D.new()
+	var offs := [Vector3(0, 1.6, 0), Vector3(-2.6, 1.2, 0.6), Vector3(2.4, 1.2, -0.5), Vector3(0.3, 1.4, 2.2)]
+	var scl := [Vector3(4.6, 2.6, 4.6), Vector3(3.0, 1.8, 3.0), Vector3(3.2, 1.9, 3.2), Vector3(2.6, 1.6, 2.6)]
+	for i in range(offs.size()):
+		r.add_child(_mi(sphere_mesh, _snowm(), offs[i], scl[i], true))
+	return r
+
+func _build_winter_library() -> void:
+	if not lib_snow_tree.is_empty():
+		return
+	lib_snow_tree.append(_make_snowy_round_tree(GREENS[3]))
+	lib_snow_tree.append(_make_snowy_round_tree(GREENS[1]))
+	lib_snow_tree.append(_make_snowy_pine(GREENS[3]))
+	lib_snow_tree.append(_make_snowy_pine(GREENS[0]))
+	lib_snow_mound.append(_make_snow_mound())
+
+func _build_winter_decor(t: Tile) -> void:
+	# зимняя версия плитки: те же позиции, но деревья «в снегу» и сугробы;
+	# травы и цветов нет (поле под снегом)
+	_build_winter_library()
+	t.winter = Node3D.new()
+	t.pivot.add_child(t.winter)
+	for it in t.items:
+		var proto: Node3D = null
+		match it.type:
+			"tree":
+				proto = lib_snow_tree[randi() % lib_snow_tree.size()]
+			"bush", "rock":
+				proto = lib_snow_mound[0]
+			_:
+				continue   # цветы под снегом не показываем
+		var n := proto.duplicate() as Node3D
+		n.position = Vector3(it.x, 0.0, it.y)
+		n.scale = Vector3.ONE * float(it.sc)
+		n.rotation.y = it.rot
+		t.winter.add_child(n)
+
 func _free_protos() -> void:
-	# прототипы декора больше не нужны (поле уже собрано через duplicate)
+	# прототипы летнего декора больше не нужны (поле уже собрано через duplicate);
+	# зимние прототипы (lib_snow_*) создаются лениво при первой зиме и не освобождаются
 	for arr in [lib_tuft, lib_flower, lib_bush, lib_tree, lib_rock]:
 		for p in arr:
 			p.queue_free()
@@ -1425,7 +1547,9 @@ func _build_decor_library() -> void:
 
 func _build_decor(t: Tile) -> void:
 	var HW := BAND * 0.5
-	var items := []
+	t.summer = Node3D.new()
+	t.pivot.add_child(t.summer)
+	var items := t.items
 	# очень густая трава — через MultiMesh (один draw-call на плитку)
 	var gx := []
 	var gc := []
@@ -1456,7 +1580,7 @@ func _build_decor(t: Tile) -> void:
 		mmi.multimesh = mm
 		mmi.material_override = tuft_mm_mat
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		t.pivot.add_child(mmi)
+		t.summer.add_child(mmi)
 	# много разных цветочков по всей траве
 	var placed := 0
 	var guard := 0
@@ -1537,7 +1661,7 @@ func _spawn_decor_node(t: Tile, it: Dictionary) -> void:
 	n.position = Vector3(it.x, 0.0, it.y)
 	n.scale = Vector3.ONE * float(it.sc)
 	n.rotation.y = it.rot
-	t.pivot.add_child(n)
+	t.summer.add_child(n)
 
 # ======================================================================
 # Машинки — 3D-узлы
@@ -1997,14 +2121,15 @@ func _build_environment() -> void:
 	moon.directional_shadow_blend_splits = true
 	add_child(moon)
 
-	# трава
-	var grass := MeshInstance3D.new()
+	# земля (трава ↔ снег по сезону)
+	ground = MeshInstance3D.new()
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(FIELD_W + 400.0, FIELD_H + 400.0)
-	grass.mesh = pm
-	grass.material_override = _make_grass_material()
-	grass.position = Vector3(FIELD_W * 0.5, -0.5, FIELD_H * 0.5)
-	add_child(grass)
+	ground.mesh = pm
+	grass_mat = _make_grass_material()
+	ground.material_override = grass_mat
+	ground.position = Vector3(FIELD_W * 0.5, -0.5, FIELD_H * 0.5)
+	add_child(ground)
 
 	_apply_look()   # применить текущий пресет к окружению
 
@@ -2057,8 +2182,8 @@ func _build_weather() -> void:
 	# --- СНЕГ: мелкие мягкие хлопья, медленно кружат и оседают ---
 	snow_ps = GPUParticles3D.new()
 	var flake := SphereMesh.new()
-	flake.radius = 0.85
-	flake.height = 1.7
+	flake.radius = 1.1
+	flake.height = 2.2
 	flake.radial_segments = 6
 	flake.rings = 4
 	var smat := StandardMaterial3D.new()
@@ -2076,20 +2201,21 @@ func _build_weather() -> void:
 	sp.emission_box_extents = Vector3(ext_x, snow_mid, ext_z)
 	sp.direction = Vector3(0.05, -1.0, 0.03)
 	sp.spread = 8.0
-	# почти без ускорения — равномерное оседание (как терминальная скорость снега)
-	sp.gravity = Vector3(0.0, -8.0, 0.0)
-	sp.initial_velocity_min = 55.0
-	sp.initial_velocity_max = 80.0
-	sp.scale_min = 0.4
-	sp.scale_max = 0.8
+	# почти без ускорения — равномерное оседание (как терминальная скорость снега),
+	# но скорость заметная, чтобы снег явно падал, а не висел
+	sp.gravity = Vector3(0.0, -14.0, 0.0)
+	sp.initial_velocity_min = 95.0
+	sp.initial_velocity_max = 140.0
+	sp.scale_min = 0.5
+	sp.scale_max = 0.95
 	# слабая турбулентность — только лёгкое покачивание, не мешает падению
 	sp.turbulence_enabled = true
-	sp.turbulence_noise_strength = 10.0
+	sp.turbulence_noise_strength = 9.0
 	sp.turbulence_noise_scale = 1.2
 	snow_ps.process_material = sp
-	snow_ps.amount = 16000
-	snow_ps.lifetime = 9.0
-	snow_ps.preprocess = 9.0
+	snow_ps.amount = 26000
+	snow_ps.lifetime = 6.0
+	snow_ps.preprocess = 6.0
 	snow_ps.fixed_fps = 0
 	snow_ps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	snow_ps.position = Vector3(cx, snow_mid, cz)
@@ -2174,8 +2300,30 @@ func apply_preset(name: String) -> void:
 		look = PRESETS[name].duplicate(true)
 		current_preset = name
 		_apply_look()
+		set_winter(look.get("winter", false))
 		_update_style_buttons()
 		_flash("Пресет: " + name)
+
+func set_winter(on: bool) -> void:
+	winter_on = on
+	# земля: снег ↔ трава
+	if ground:
+		if on and snow_ground_mat == null:
+			snow_ground_mat = _make_snow_ground_material()
+		ground.material_override = snow_ground_mat if on else grass_mat
+	# декор каждой плитки: переключаем летний/зимний контейнеры (зимний — лениво)
+	for t in tiles:
+		if on and t.winter == null:
+			_build_winter_decor(t)
+		if t.summer:
+			t.summer.visible = not on
+		if t.winter:
+			t.winter.visible = on
+	# зимой включаем снегопад; при выходе из зимы убираем именно снег
+	if on:
+		set_weather(2)
+	elif weather == 2:
+		set_weather(0)
 
 func save_look() -> void:
 	var c := ConfigFile.new()
@@ -2193,6 +2341,7 @@ func load_look() -> bool:
 		look[k] = c.get_value("look", k)
 	current_preset = ""   # загружены свои настройки — ни один пресет не активен
 	_apply_look()
+	set_winter(look.get("winter", false))
 	_update_style_buttons()
 	if c.has_section_key("fx", "style"):
 		set_style(int(c.get_value("fx", "style", 0)))

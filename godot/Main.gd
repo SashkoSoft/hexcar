@@ -2019,7 +2019,7 @@ func _build_weather() -> void:
 	# --- ДОЖДЬ: вытянутые косые струи, быстро падают на землю ---
 	rain_ps = GPUParticles3D.new()
 	var rdrop := BoxMesh.new()
-	rdrop.size = Vector3(0.9, 38.0, 0.9)
+	rdrop.size = Vector3(0.45, 24.0, 0.45)
 	var rmat := StandardMaterial3D.new()
 	rmat.albedo_color = Color(0.82, 0.88, 1.0, 0.55)
 	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -2038,8 +2038,8 @@ func _build_weather() -> void:
 	rp.gravity = Vector3(40.0, -1500.0, 15.0)
 	rp.initial_velocity_min = 950.0
 	rp.initial_velocity_max = 1150.0
-	rp.scale_min = 0.6
-	rp.scale_max = 1.0
+	rp.scale_min = 0.5
+	rp.scale_max = 0.85
 	rain_ps.process_material = rp
 	rain_ps.amount = 4200
 	rain_ps.lifetime = 0.7
@@ -2056,8 +2056,8 @@ func _build_weather() -> void:
 	# --- СНЕГ: мелкие мягкие хлопья, медленно кружат и оседают ---
 	snow_ps = GPUParticles3D.new()
 	var flake := SphereMesh.new()
-	flake.radius = 1.7
-	flake.height = 3.4
+	flake.radius = 0.85
+	flake.height = 1.7
 	flake.radial_segments = 6
 	flake.rings = 4
 	var smat := StandardMaterial3D.new()
@@ -2076,16 +2076,16 @@ func _build_weather() -> void:
 	sp.gravity = Vector3(0.0, -60.0, 0.0)
 	sp.initial_velocity_min = 60.0
 	sp.initial_velocity_max = 90.0
-	sp.scale_min = 0.5
-	sp.scale_max = 1.1
+	sp.scale_min = 0.4
+	sp.scale_max = 0.8
 	# слабая турбулентность — только лёгкое покачивание, не мешает падению
 	sp.turbulence_enabled = true
 	sp.turbulence_noise_strength = 10.0
 	sp.turbulence_noise_scale = 1.2
 	snow_ps.process_material = sp
-	snow_ps.amount = 9000
-	snow_ps.lifetime = 5.0
-	snow_ps.preprocess = 5.0
+	snow_ps.amount = 16000
+	snow_ps.lifetime = 11.0
+	snow_ps.preprocess = 11.0
 	snow_ps.fixed_fps = 0
 	snow_ps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	snow_ps.position = Vector3(cx, snow_top, cz)

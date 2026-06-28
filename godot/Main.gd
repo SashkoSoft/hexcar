@@ -2013,12 +2013,13 @@ func _build_weather() -> void:
 	var cz := FIELD_H * 0.5
 	var ext_x := FIELD_W * 0.5 + 250.0
 	var ext_z := FIELD_H * 0.5 + 250.0
-	var top := 700.0
+	var top := 700.0        # высота спавна дождя
+	var snow_top := 480.0   # снег спавнится ниже — успевает долететь до земли
 
 	# --- ДОЖДЬ: вытянутые косые струи, быстро падают на землю ---
 	rain_ps = GPUParticles3D.new()
 	var rdrop := BoxMesh.new()
-	rdrop.size = Vector3(1.6, 55.0, 1.6)
+	rdrop.size = Vector3(0.9, 38.0, 0.9)
 	var rmat := StandardMaterial3D.new()
 	rmat.albedo_color = Color(0.82, 0.88, 1.0, 0.55)
 	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -2037,8 +2038,8 @@ func _build_weather() -> void:
 	rp.gravity = Vector3(40.0, -1500.0, 15.0)
 	rp.initial_velocity_min = 950.0
 	rp.initial_velocity_max = 1150.0
-	rp.scale_min = 0.8
-	rp.scale_max = 1.4
+	rp.scale_min = 0.6
+	rp.scale_max = 1.0
 	rain_ps.process_material = rp
 	rain_ps.amount = 4200
 	rain_ps.lifetime = 0.7
@@ -2055,8 +2056,8 @@ func _build_weather() -> void:
 	# --- СНЕГ: мелкие мягкие хлопья, медленно кружат и оседают ---
 	snow_ps = GPUParticles3D.new()
 	var flake := SphereMesh.new()
-	flake.radius = 2.8
-	flake.height = 5.6
+	flake.radius = 1.7
+	flake.height = 3.4
 	flake.radial_segments = 6
 	flake.rings = 4
 	var smat := StandardMaterial3D.new()
@@ -2070,24 +2071,25 @@ func _build_weather() -> void:
 	var sp := ParticleProcessMaterial.new()
 	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
 	sp.emission_box_extents = Vector3(ext_x, 1.0, ext_z)
-	sp.direction = Vector3(0.0, -1.0, 0.0)
-	sp.spread = 12.0
-	sp.gravity = Vector3(0.0, -45.0, 0.0)
-	sp.initial_velocity_min = 50.0
-	sp.initial_velocity_max = 85.0
+	sp.direction = Vector3(0.05, -1.0, 0.03)
+	sp.spread = 8.0
+	sp.gravity = Vector3(0.0, -60.0, 0.0)
+	sp.initial_velocity_min = 60.0
+	sp.initial_velocity_max = 90.0
 	sp.scale_min = 0.5
-	sp.scale_max = 1.4
+	sp.scale_max = 1.1
+	# слабая турбулентность — только лёгкое покачивание, не мешает падению
 	sp.turbulence_enabled = true
-	sp.turbulence_noise_strength = 28.0
-	sp.turbulence_noise_scale = 1.4
+	sp.turbulence_noise_strength = 10.0
+	sp.turbulence_noise_scale = 1.2
 	snow_ps.process_material = sp
-	snow_ps.amount = 6500
-	snow_ps.lifetime = 6.0
-	snow_ps.preprocess = 6.0
+	snow_ps.amount = 9000
+	snow_ps.lifetime = 5.0
+	snow_ps.preprocess = 5.0
 	snow_ps.fixed_fps = 0
 	snow_ps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	snow_ps.position = Vector3(cx, top, cz)
-	snow_ps.visibility_aabb = AABB(Vector3(-ext_x, -top - 100.0, -ext_z), Vector3(2.0 * ext_x, top + 200.0, 2.0 * ext_z))
+	snow_ps.position = Vector3(cx, snow_top, cz)
+	snow_ps.visibility_aabb = AABB(Vector3(-ext_x, -snow_top - 100.0, -ext_z), Vector3(2.0 * ext_x, snow_top + 200.0, 2.0 * ext_z))
 	snow_ps.visible = false
 	snow_ps.emitting = false
 	add_child(snow_ps)

@@ -71,9 +71,9 @@ class Tile:
 	var pivot: Node3D
 	var target_yaw: float
 	var roads: Array = []   # 3 MeshInstance3D дорог (для подсветки)
-	var summer: Node3D      # контейнер летнего декора (трава/цветы/деревья)
-	var winter: Node3D      # контейнер зимнего декора (строится лениво при первой зиме)
-	var items: Array = []   # сохранённый список декора (чтобы собрать зимнюю версию)
+	var deco := {}          # сезон → Node3D-контейнер декора (строятся лениво)
+	var items: Array = []   # сохранённый список декора (позиции/типы для всех сезонов)
+	var grass_x: Array = [] # трансформы пучков травы (цвет задаётся по сезону)
 
 class Car:
 	var ti: int = 0
@@ -179,18 +179,6 @@ var PRESETS := {
 		"tonemap": "agx", "exposure": 0.95, "contrast": 1.15, "saturation": 1.08, "brightness": 1.0,
 		"sun": 1.0,
 	},
-	"Зима": {
-		# холодный пасмурно-ясный день: голубоватое небо, прохладный свет
-		"ambient_color": Color(0.62, 0.70, 0.82), "ambient_energy": 0.55,
-		"moon_color": Color(0.86, 0.92, 1.0), "moon_energy": 1.5,
-		"glow_intensity": 0.35, "glow_bloom": 0.10, "glow_threshold": 1.0,
-		"sky_top": Color(0.40, 0.55, 0.78), "sky_horizon": Color(0.80, 0.86, 0.93), "star": 0.0,
-		"hl_energy": 6.0, "hl_range": 200.0, "hl_angle": 30.0, "hl_color": Color(0.92, 0.96, 1.0),
-		"highlight_emission": 0.8,
-		"tonemap": "agx", "exposure": 1.0, "contrast": 1.08, "saturation": 0.92, "brightness": 1.04,
-		"sun": 0.85,
-		"winter": true,   # включает заснеженное поле и снегопад
-	},
 }
 var flash_label: Label
 var flash_t := 0.0
@@ -261,13 +249,16 @@ var lib_flower: Array = []
 var lib_bush: Array = []
 var lib_tree: Array = []
 var lib_rock: Array = []
-var lib_snow_tree: Array = []   # зимние деревья «в снегу» (строятся лениво)
+var lib_snow_tree: Array = []   # зимние деревья «в снегу»
 var lib_snow_mound: Array = []  # сугробы/заснеженные кусты-камни
-var ground: MeshInstance3D      # плоскость земли (трава ↔ снег)
+var lib_autumn_tree: Array = [] # осенние деревья (жёлто-красная листва)
+var lib_autumn_bush: Array = []
+var lib_spring_tree: Array = [] # весенние деревья (свежая зелень + цветение)
+var proto_holder: Node3D        # скрытый родитель прототипов декора (вместо free)
+var ground: MeshInstance3D      # плоскость земли (трава ↔ снег по сезону)
 var grass_mat: StandardMaterial3D
-var snow_ground_mat: StandardMaterial3D
 var snow_white_mat: StandardMaterial3D   # общий матовый снег для шапок/сугробов
-var winter_on := false
+var ground_mats := {}           # сезон → материал земли (ленивый кэш)
 var GREENS := [
 	Color8(0x3f, 0x7a, 0x36), Color8(0x35, 0x6b, 0x2e), Color8(0x48, 0x7f, 0x3a),
 	Color8(0x2f, 0x6b, 0x2c), Color8(0x5a, 0x9a, 0x3e), Color8(0x6f, 0xb8, 0x5f),
@@ -278,6 +269,31 @@ var FLOWER_COLS := [
 	Color8(0x4d, 0xb6, 0xff), Color8(0xff, 0x9e, 0xc7), Color8(0xff, 0xec, 0x5c),
 ]
 var TRUNK_COL := Color8(0x6b, 0x47, 0x2a)
+# осенняя/весенняя палитры
+var AUTUMN := [
+	Color8(0xd9, 0x8e, 0x2b), Color8(0xc4, 0x5b, 0x28), Color8(0xb0, 0x36, 0x2a),
+	Color8(0xe0, 0xb0, 0x3a), Color8(0x9a, 0x6b, 0x2b),
+]
+var AUTUMN_GRASS := [
+	Color8(0x8f, 0x90, 0x50), Color8(0xa3, 0x96, 0x52), Color8(0x76, 0x82, 0x48),
+	Color8(0xb0, 0x92, 0x4c), Color8(0x6f, 0x7e, 0x44),
+]
+var SPRING_GREEN := [
+	Color8(0x8f, 0xcf, 0x5a), Color8(0xa3, 0xd9, 0x66), Color8(0x77, 0xc2, 0x4d), Color8(0xb6, 0xe0, 0x6e),
+]
+var BLOSSOM := [Color8(0xf7, 0xc5, 0xd8), Color8(0xff, 0xfa, 0xfc), Color8(0xf2, 0x9c, 0xc0)]
+
+# сезон поля (отдельно от времени суток) + сезонная цветокоррекция света
+var SEASONS := ["Лето", "Осень", "Зима", "Весна"]
+var season := "Лето"
+var season_buttons := {}
+# множители цвета/тона, накладываются поверх пресета времени суток
+var SEASON_GRADE := {
+	"Лето":  {"amb": Color(1, 1, 1),        "sky": Color(1, 1, 1),        "light": Color(1, 1, 1),        "sat": 1.0,  "con": 1.0,  "bri": 1.0},
+	"Осень": {"amb": Color(1.03, 0.99, 0.88),"sky": Color(1.05, 0.97, 0.86),"light": Color(1.03, 0.99, 0.88),"sat": 0.96, "con": 1.02, "bri": 1.0},
+	"Зима":  {"amb": Color(0.90, 0.96, 1.10),"sky": Color(0.94, 1.0, 1.10), "light": Color(0.90, 0.96, 1.08),"sat": 0.88, "con": 1.05, "bri": 1.04},
+	"Весна": {"amb": Color(1.0, 1.04, 0.97), "sky": Color(1.0, 1.03, 1.0),  "light": Color(1.0, 1.03, 0.96), "sat": 1.09, "con": 1.0,  "bri": 1.02},
+}
 
 # ======================================================================
 func _ready() -> void:
@@ -291,7 +307,6 @@ func _ready() -> void:
 	_build_decor_library()
 	_build_road_meshes()
 	_build_field()
-	_free_protos()
 	_build_portals()
 	_build_camera()
 	_build_hover_marker()
@@ -1355,6 +1370,57 @@ func _make_snow_ground_material() -> StandardMaterial3D:
 	m.uv1_scale = Vector3(rep, rep, 1.0)
 	return m
 
+func _field_mat(base: Color, flecks: Array) -> StandardMaterial3D:
+	# обобщённый материал земли: шумовая основа + крапинки (для осени/весны)
+	var sz := 256
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGB8)
+	var coarse := FastNoiseLite.new()
+	coarse.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	coarse.frequency = 0.018
+	coarse.seed = randi()
+	var fine := FastNoiseLite.new()
+	fine.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	fine.frequency = 0.11
+	fine.seed = randi()
+	for yy in sz:
+		for xx in sz:
+			var s: float = clamp(_seamless(coarse, xx, yy, sz) * 0.5 + 0.5, 0.0, 1.0)
+			var f: float = clamp(_seamless(fine, xx, yy, sz) * 0.5 + 0.5, 0.0, 1.0)
+			var col := base.darkened(0.18).lerp(base.lightened(0.14), s)
+			col = col.lerp(base.lightened(0.20), f * 0.25)
+			img.set_pixel(xx, yy, col)
+	for i in range(1700):
+		var x := randi() % sz
+		var y := randi() % sz
+		img.set_pixel(x, y, flecks[randi() % flecks.size()])
+	var tex := ImageTexture.create_from_image(img)
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = tex
+	m.roughness = 1.0
+	var rep := (FIELD_W + 400.0) / 150.0
+	m.uv1_scale = Vector3(rep, rep, 1.0)
+	return m
+
+func _season_ground(s: String) -> StandardMaterial3D:
+	if ground_mats.has(s):
+		return ground_mats[s]
+	var m: StandardMaterial3D
+	match s:
+		"Зима":
+			m = _make_snow_ground_material()
+		"Осень":
+			# увядающая трава (зеленовато-оливковая основа: тёплый свет доводит её
+			# до золотистой, а не оранжевой) + опавшие листья крапинками
+			m = _field_mat(Color8(0x5c, 0x72, 0x4c),
+				[AUTUMN[1], AUTUMN[3], Color8(0x8a, 0x6a, 0x30), Color8(0x6f, 0x7e, 0x44), Color8(0x86, 0x88, 0x50)])
+		"Весна":
+			m = _field_mat(Color8(0x6f, 0xc0, 0x52),
+				[Color8(0x9f, 0xe0, 0x6a), FLOWER_COLS[1], FLOWER_COLS[4], FLOWER_COLS[7], Color8(0x55, 0xa8, 0x40)])
+		_:
+			m = grass_mat
+	ground_mats[s] = m
+	return m
+
 # ---- Вспомогательные конструкторы декора ----
 func _mi(mesh: Mesh, mat: Material, pos: Vector3, scl: Vector3, shadow: bool) -> MeshInstance3D:
 	var n := MeshInstance3D.new()
@@ -1487,43 +1553,29 @@ func _make_snow_mound() -> Node3D:
 		r.add_child(_mi(sphere_mesh, _snowm(), offs[i], scl[i], true))
 	return r
 
-func _build_winter_library() -> void:
-	if not lib_snow_tree.is_empty():
-		return
-	lib_snow_tree.append(_make_snowy_round_tree(GREENS[3]))
-	lib_snow_tree.append(_make_snowy_round_tree(GREENS[1]))
-	lib_snow_tree.append(_make_snowy_pine(GREENS[3]))
-	lib_snow_tree.append(_make_snowy_pine(GREENS[0]))
-	lib_snow_mound.append(_make_snow_mound())
+func _make_blossom_tree(green: Color, blossom: Color) -> Node3D:
+	# весеннее цветущее дерево: зелёная крона + гроздья цветения
+	var r := Node3D.new()
+	r.add_child(_mi(cyl_mesh, get_mat(TRUNK_COL), Vector3(0, 7.0, 0), Vector3(2.4, 14, 2.4), true))
+	r.add_child(_mi(sphere_mesh, get_mat(green), Vector3(0, 18.0, 0), Vector3(11.5, 12.0, 11.5), true))
+	r.add_child(_mi(sphere_mesh, get_mat(green.lightened(0.10)), Vector3(3.5, 22.0, 2.0), Vector3(7.2, 7.2, 7.2), true))
+	r.add_child(_mi(sphere_mesh, get_mat(green.darkened(0.08)), Vector3(-3.8, 20.0, -2.2), Vector3(6.6, 6.6, 6.6), true))
+	var bm := get_mat(blossom, 0.6)
+	var pos := [Vector3(0, 24.5, 0), Vector3(5.5, 21.0, 2.5), Vector3(-5.0, 22.0, -2.0), Vector3(2.0, 19.5, 5.5), Vector3(-3.0, 25.0, 1.5)]
+	for p in pos:
+		r.add_child(_mi(sphere_mesh, bm, p, Vector3(3.4, 3.0, 3.4), true))
+	return r
 
-func _build_winter_decor(t: Tile) -> void:
-	# зимняя версия плитки: те же позиции, но деревья «в снегу» и сугробы;
-	# травы и цветов нет (поле под снегом)
-	_build_winter_library()
-	t.winter = Node3D.new()
-	t.pivot.add_child(t.winter)
-	for it in t.items:
-		var proto: Node3D = null
-		match it.type:
-			"tree":
-				proto = lib_snow_tree[randi() % lib_snow_tree.size()]
-			"bush", "rock":
-				proto = lib_snow_mound[0]
-			_:
-				continue   # цветы под снегом не показываем
-		var n := proto.duplicate() as Node3D
-		n.position = Vector3(it.x, 0.0, it.y)
-		n.scale = Vector3.ONE * float(it.sc)
-		n.rotation.y = it.rot
-		t.winter.add_child(n)
-
-func _free_protos() -> void:
-	# прототипы летнего декора больше не нужны (поле уже собрано через duplicate);
-	# зимние прототипы (lib_snow_*) создаются лениво при первой зиме и не освобождаются
-	for arr in [lib_tuft, lib_flower, lib_bush, lib_tree, lib_rock]:
+func _hold_protos(arrs: Array) -> void:
+	# держим прототипы как скрытых детей сцены (не рендерятся и не «утекают»)
+	if proto_holder == null:
+		proto_holder = Node3D.new()
+		proto_holder.visible = false
+		add_child(proto_holder)
+	for arr in arrs:
 		for p in arr:
-			p.queue_free()
-		arr.clear()
+			if p.get_parent() == null:
+				proto_holder.add_child(p)
 
 func _build_decor_library() -> void:
 	# общий меш + материал травы (цвет задаётся per-instance через MultiMesh)
@@ -1533,6 +1585,7 @@ func _build_decor_library() -> void:
 	tuft_mm_mat.vertex_color_use_as_albedo = true
 	tuft_mm_mat.roughness = 0.9
 	tuft_mm_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Лето
 	for fc in FLOWER_COLS:
 		lib_flower.append(_make_flower(fc))
 	for c in GREENS:
@@ -1544,15 +1597,33 @@ func _build_decor_library() -> void:
 	lib_tree.append(_make_pine(GREENS[0]))
 	lib_rock.append(_make_rock(Color8(0xb9, 0xb2, 0xa4), 4.0, 2.2, 4.0))
 	lib_rock.append(_make_rock(Color8(0x9a, 0x93, 0x85), 3.4, 2.0, 3.6))
+	# Зима
+	lib_snow_tree.append(_make_snowy_round_tree(GREENS[3]))
+	lib_snow_tree.append(_make_snowy_round_tree(GREENS[1]))
+	lib_snow_tree.append(_make_snowy_pine(GREENS[3]))
+	lib_snow_tree.append(_make_snowy_pine(GREENS[0]))
+	lib_snow_mound.append(_make_snow_mound())
+	# Осень
+	lib_autumn_tree.append(_make_round_tree(AUTUMN[0]))
+	lib_autumn_tree.append(_make_round_tree(AUTUMN[1]))
+	lib_autumn_tree.append(_make_round_tree(AUTUMN[3]))
+	lib_autumn_tree.append(_make_pine(GREENS[3].lerp(AUTUMN[4], 0.35)))
+	lib_autumn_bush.append(_make_bush(AUTUMN[1]))
+	lib_autumn_bush.append(_make_bush(AUTUMN[4]))
+	# Весна
+	lib_spring_tree.append(_make_round_tree(SPRING_GREEN[0]))
+	lib_spring_tree.append(_make_round_tree(SPRING_GREEN[2]))
+	lib_spring_tree.append(_make_blossom_tree(SPRING_GREEN[2], BLOSSOM[0]))
+	lib_spring_tree.append(_make_blossom_tree(SPRING_GREEN[1], BLOSSOM[2]))
+	lib_spring_tree.append(_make_pine(GREENS[0]))
+	_hold_protos([lib_flower, lib_bush, lib_tree, lib_rock,
+		lib_snow_tree, lib_snow_mound, lib_autumn_tree, lib_autumn_bush, lib_spring_tree])
 
 func _build_decor(t: Tile) -> void:
+	# генерируем раскладку (позиции травы и декора) ОДИН раз; декор конкретного
+	# сезона строится в отдельном контейнере (другие сезоны — лениво)
 	var HW := BAND * 0.5
-	t.summer = Node3D.new()
-	t.pivot.add_child(t.summer)
-	var items := t.items
-	# очень густая трава — через MultiMesh (один draw-call на плитку)
-	var gx := []
-	var gc := []
+	# трава
 	var gp := 0
 	var gg := 0
 	while gp < 1200 and gg < 10000:
@@ -1564,24 +1635,9 @@ func _build_decor(t: Tile) -> void:
 		if _dist_to_roads(x, y) - HW > 1.0:
 			var tsc := 0.35 + randf() * 0.5
 			var tb := Basis(Vector3.UP, randf() * TAU).scaled(Vector3.ONE * tsc)
-			gx.append(Transform3D(tb, Vector3(x, 0, y)))
-			gc.append(GREENS[randi() % GREENS.size()])
+			t.grass_x.append(Transform3D(tb, Vector3(x, 0, y)))
 			gp += 1
-	if gx.size() > 0:
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.use_colors = true
-		mm.mesh = tuft_mm_mesh
-		mm.instance_count = gx.size()
-		for i in range(gx.size()):
-			mm.set_instance_transform(i, gx[i])
-			mm.set_instance_color(i, gc[i])
-		var mmi := MultiMeshInstance3D.new()
-		mmi.multimesh = mm
-		mmi.material_override = tuft_mm_mat
-		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		t.summer.add_child(mmi)
-	# много разных цветочков по всей траве
+	# цветочки
 	var placed := 0
 	var guard := 0
 	while placed < 28 and guard < 1200:
@@ -1591,7 +1647,7 @@ func _build_decor(t: Tile) -> void:
 		var x := cos(a) * rad
 		var y := sin(a) * rad
 		if _dist_to_roads(x, y) - HW > 2.0:
-			items.append({"type": "flower", "x": x, "y": y, "sc": 0.425 + randf() * 0.4, "rot": randf() * TAU})
+			t.items.append({"type": "flower", "x": x, "y": y, "sc": 0.425 + randf() * 0.4, "rot": randf() * TAU})
 			placed += 1
 	# камешки вдоль дороги
 	placed = 0
@@ -1604,7 +1660,7 @@ func _build_decor(t: Tile) -> void:
 		var y := sin(a) * rad
 		var off := _dist_to_roads(x, y) - HW
 		if off > 2.0 and off < 12.0:
-			items.append({"type": "rock", "x": x, "y": y, "sc": 0.65 + randf() * 0.7, "rot": randf() * TAU})
+			t.items.append({"type": "rock", "x": x, "y": y, "sc": 0.65 + randf() * 0.7, "rot": randf() * TAU})
 			placed += 1
 	# цветы, кусты, деревья по удалённости от дороги
 	placed = 0
@@ -1629,7 +1685,7 @@ func _build_decor(t: Tile) -> void:
 		var sc := 0.9 + randf() * 0.8
 		if type == "tree":
 			sc = 0.8 + randf() * 0.5
-		items.append({"type": type, "x": x, "y": y, "sc": sc, "rot": randf() * TAU})
+		t.items.append({"type": type, "x": x, "y": y, "sc": sc, "rot": randf() * TAU})
 		placed += 1
 	# дополнительный проход деревьев (удвоение) — подальше от дороги
 	placed = 0
@@ -1641,27 +1697,73 @@ func _build_decor(t: Tile) -> void:
 		var x := cos(a) * rad
 		var y := sin(a) * rad
 		if _dist_to_roads(x, y) - HW > 8.0:
-			items.append({"type": "tree", "x": x, "y": y, "sc": 0.8 + randf() * 0.5, "rot": randf() * TAU})
+			t.items.append({"type": "tree", "x": x, "y": y, "sc": 0.8 + randf() * 0.5, "rot": randf() * TAU})
 			placed += 1
-	for it in items:
-		_spawn_decor_node(t, it)
+	_build_season_decor(t, season)   # стартовый сезон (Лето)
 
-func _spawn_decor_node(t: Tile, it: Dictionary) -> void:
-	var proto: Node3D = null
-	match it.type:
-		"flower":
-			proto = lib_flower[randi() % lib_flower.size()]
-		"bush":
-			proto = lib_bush[randi() % lib_bush.size()]
-		"tree":
-			proto = lib_tree[randi() % lib_tree.size()]
-		_:
-			proto = lib_rock[randi() % lib_rock.size()]
-	var n := proto.duplicate() as Node3D
-	n.position = Vector3(it.x, 0.0, it.y)
-	n.scale = Vector3.ONE * float(it.sc)
-	n.rotation.y = it.rot
-	t.summer.add_child(n)
+func _grass_palette(s: String) -> Array:
+	match s:
+		"Осень": return AUTUMN_GRASS
+		"Весна": return SPRING_GREEN
+		_: return GREENS
+
+func _build_season_decor(t: Tile, s: String) -> void:
+	var cont := Node3D.new()
+	t.pivot.add_child(cont)
+	t.deco[s] = cont
+	# трава (кроме зимы) — общий меш, цвет по сезону
+	if s != "Зима" and t.grass_x.size() > 0:
+		var pal := _grass_palette(s)
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = tuft_mm_mesh
+		mm.instance_count = t.grass_x.size()
+		for i in range(t.grass_x.size()):
+			mm.set_instance_transform(i, t.grass_x[i])
+			mm.set_instance_color(i, pal[randi() % pal.size()])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.material_override = tuft_mm_mat
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		cont.add_child(mmi)
+	# декор по сохранённой раскладке
+	for it in t.items:
+		var proto := _season_proto(s, it.type)
+		if proto == null:
+			continue
+		var n := proto.duplicate() as Node3D
+		n.position = Vector3(it.x, 0.0, it.y)
+		n.scale = Vector3.ONE * float(it.sc)
+		n.rotation.y = it.rot
+		cont.add_child(n)
+
+func _season_proto(s: String, type: String) -> Node3D:
+	match s:
+		"Зима":
+			match type:
+				"tree": return lib_snow_tree[randi() % lib_snow_tree.size()]
+				"bush", "rock": return lib_snow_mound[0]
+				_: return null   # цветы под снегом не показываем
+		"Осень":
+			match type:
+				"tree": return lib_autumn_tree[randi() % lib_autumn_tree.size()]
+				"bush": return lib_autumn_bush[randi() % lib_autumn_bush.size()]
+				"rock": return lib_rock[randi() % lib_rock.size()]
+				_: return lib_flower[randi() % lib_flower.size()] if randf() < 0.25 else null
+		"Весна":
+			match type:
+				"tree": return lib_spring_tree[randi() % lib_spring_tree.size()]
+				"bush": return lib_bush[randi() % lib_bush.size()]
+				"rock": return lib_rock[randi() % lib_rock.size()]
+				_: return lib_flower[randi() % lib_flower.size()]
+		_:  # Лето
+			match type:
+				"tree": return lib_tree[randi() % lib_tree.size()]
+				"bush": return lib_bush[randi() % lib_bush.size()]
+				"rock": return lib_rock[randi() % lib_rock.size()]
+				_: return lib_flower[randi() % lib_flower.size()]
+	return null
 
 # ======================================================================
 # Машинки — 3D-узлы
@@ -2247,8 +2349,9 @@ func _v3(c: Color) -> Vector3:
 func _apply_look() -> void:
 	if look.is_empty():
 		return
+	var g: Dictionary = SEASON_GRADE.get(season, SEASON_GRADE["Лето"])
 	if env:
-		env.ambient_light_color = look["ambient_color"]
+		env.ambient_light_color = look["ambient_color"] * g["amb"]
 		env.ambient_light_energy = look["ambient_energy"]
 		env.glow_intensity = look["glow_intensity"]
 		env.glow_bloom = look["glow_bloom"]
@@ -2264,21 +2367,21 @@ func _apply_look() -> void:
 		env.tonemap_mode = tm.get(look.get("tonemap", "filmic"), Environment.TONE_MAPPER_FILMIC)
 		env.tonemap_exposure = look.get("exposure", 1.0)
 		env.adjustment_enabled = true
-		env.adjustment_brightness = look.get("brightness", 1.0)
-		env.adjustment_contrast = look.get("contrast", 1.0)
-		env.adjustment_saturation = look.get("saturation", 1.0)
+		env.adjustment_brightness = look.get("brightness", 1.0) * g["bri"]
+		env.adjustment_contrast = look.get("contrast", 1.0) * g["con"]
+		env.adjustment_saturation = look.get("saturation", 1.0) * g["sat"]
 	if moon:
-		moon.light_color = look["moon_color"]
+		moon.light_color = look["moon_color"] * g["light"]
 		moon.light_energy = look["moon_energy"]
 	if sky_mat:
-		sky_mat.set_shader_parameter("u_sky_top", _v3(look["sky_top"]))
-		sky_mat.set_shader_parameter("u_sky_horizon", _v3(look["sky_horizon"]))
+		sky_mat.set_shader_parameter("u_sky_top", _v3(look["sky_top"] * g["sky"]))
+		sky_mat.set_shader_parameter("u_sky_horizon", _v3(look["sky_horizon"] * g["sky"]))
 		sky_mat.set_shader_parameter("u_star", look["star"])
 		sky_mat.set_shader_parameter("u_sun", look.get("sun", 0.0))
 		if moon:
 			# солнце в небе — там, откуда падает свет (ось +Z направленного света)
 			sky_mat.set_shader_parameter("u_sun_dir", moon.global_transform.basis.z)
-		sky_mat.set_shader_parameter("u_sun_color", _v3(look["moon_color"]))
+		sky_mat.set_shader_parameter("u_sun_color", _v3(look["moon_color"] * g["light"]))
 	# фары существующих машинок
 	for c in cars:
 		for sp in c.lights:
@@ -2296,40 +2399,47 @@ func _apply_look() -> void:
 			mat_cache.erase(mk)
 
 func apply_preset(name: String) -> void:
+	# пресет = время суток (свет/небо); сезон задаётся отдельно
 	if PRESETS.has(name):
 		look = PRESETS[name].duplicate(true)
 		current_preset = name
 		_apply_look()
-		set_winter(look.get("winter", false))
 		_update_style_buttons()
-		_flash("Пресет: " + name)
+		_flash("Свет: " + name)
 
-func set_winter(on: bool) -> void:
-	winter_on = on
-	# земля: снег ↔ трава
+func set_season(name: String) -> void:
+	if not SEASONS.has(name):
+		return
+	season = name
+	# земля
 	if ground:
-		if on and snow_ground_mat == null:
-			snow_ground_mat = _make_snow_ground_material()
-		ground.material_override = snow_ground_mat if on else grass_mat
-	# декор каждой плитки: переключаем летний/зимний контейнеры (зимний — лениво)
+		ground.material_override = _season_ground(name)
+	# декор каждой плитки: показываем контейнер сезона (строим лениво при первом показе)
 	for t in tiles:
-		if on and t.winter == null:
-			_build_winter_decor(t)
-		if t.summer:
-			t.summer.visible = not on
-		if t.winter:
-			t.winter.visible = on
+		if not t.deco.has(name):
+			_build_season_decor(t, name)
+		for sk in t.deco:
+			t.deco[sk].visible = (sk == name)
+	# сезонная цветокоррекция света зависит от сезона → пересчёт
+	_apply_look()
 	# зимой включаем снегопад; при выходе из зимы убираем именно снег
-	if on:
+	if name == "Зима":
 		set_weather(2)
 	elif weather == 2:
 		set_weather(0)
+	_update_season_buttons()
+	_flash("Сезон: " + name)
+
+func _update_season_buttons() -> void:
+	for nm in season_buttons:
+		season_buttons[nm].modulate = Color(1, 0.85, 0.35) if nm == season else Color(1, 1, 1)
 
 func save_look() -> void:
 	var c := ConfigFile.new()
 	for k in look.keys():
 		c.set_value("look", k, look[k])
 	c.set_value("fx", "style", current_style)
+	c.set_value("season", "name", season)
 	var err := c.save(LOOK_PATH)
 	_flash("Сохранено" if err == OK else "Ошибка сохранения")
 
@@ -2340,8 +2450,9 @@ func load_look() -> bool:
 	for k in c.get_section_keys("look"):
 		look[k] = c.get_value("look", k)
 	current_preset = ""   # загружены свои настройки — ни один пресет не активен
+	if c.has_section_key("season", "name"):
+		set_season(c.get_value("season", "name", "Лето"))
 	_apply_look()
-	set_winter(look.get("winter", false))
 	_update_style_buttons()
 	if c.has_section_key("fx", "style"):
 		set_style(int(c.get_value("fx", "style", 0)))
@@ -2636,14 +2747,36 @@ func _build_style_menu() -> void:
 	title.add_theme_font_size_override("font_size", 16)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
+	# --- время суток (свет/небо) ---
+	var ttl := Label.new()
+	ttl.text = "Время суток"
+	ttl.add_theme_font_size_override("font_size", 13)
+	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(ttl)
 	for name in PRESETS.keys():
 		var btn := Button.new()
 		btn.text = name
-		btn.custom_minimum_size = Vector2(165, 32)
+		btn.custom_minimum_size = Vector2(165, 30)
 		var nm: String = name
 		btn.pressed.connect(func(): apply_preset(nm))
 		vb.add_child(btn)
 		style_buttons[name] = btn
+	# --- сезон (поле + сезонный цвето-свет) ---
+	vb.add_child(HSeparator.new())
+	var stl := Label.new()
+	stl.text = "Сезон"
+	stl.add_theme_font_size_override("font_size", 13)
+	stl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(stl)
+	for sname in SEASONS:
+		var sbtn := Button.new()
+		sbtn.text = sname
+		sbtn.custom_minimum_size = Vector2(165, 30)
+		var snm: String = sname
+		sbtn.pressed.connect(func(): set_season(snm))
+		vb.add_child(sbtn)
+		season_buttons[sname] = sbtn
+	_update_season_buttons()
 	vb.add_child(HSeparator.new())
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 5)

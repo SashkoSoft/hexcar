@@ -198,9 +198,11 @@ var fx_rect: ColorRect
 var fx_mat: ShaderMaterial
 var style_fx_buttons := {}      # индекс -> Button
 
-# дождь (отключаемый в меню)
+# дождь (отключаемый в меню) — экранный оверлей (вид сверху, частицы не видны)
 var rain_enabled := false
-var rain_node: GPUParticles3D
+var rain_layer2: CanvasLayer
+var rain_rect: ColorRect
+var rain_mat: ShaderMaterial
 var rain_btn: Button
 
 # камера (орбитальная, со сглаживанием как в Dorfromantik)
@@ -272,6 +274,7 @@ func _ready() -> void:
 	_build_camera()
 	_build_hover_marker()
 	_build_fx()
+	_build_rain()   # экранный оверлей дождя — после _build_fx, чтобы рисовался поверх стиля
 	_build_ui()
 	_show_menu()
 	load_look()   # если есть сохранённые настройки на диске — применить их
@@ -2003,52 +2006,63 @@ func _build_environment() -> void:
 	grass.position = Vector3(FIELD_W * 0.5, -0.5, FIELD_H * 0.5)
 	add_child(grass)
 
-	_build_rain()
-
 	_apply_look()   # применить текущий пресет к окружению
 
+const _RAIN_SHADER := """
+shader_type canvas_item;
+render_mode blend_mix;
+
+uniform float u_amount = 1.0;
+
+float hash(float n){ return fract(sin(n) * 43758.5453123); }
+
+// один слой косых струй дождя
+float rain_layer(vec2 uv, float cols, float rows, float speed, float slant, float seed){
+	uv.x += uv.y * slant;                      // наклон струй
+	float gx = uv.x * cols;
+	float colid = floor(gx);
+	float fx = fract(gx);
+	float r = hash(colid * 1.7 + seed * 13.0);
+	float active = step(0.4, hash(colid * 3.1 + seed * 7.0));   // часть колонок пустая
+	float yphase = fract(uv.y * rows - (TIME * speed + r * 10.0));
+	// струя: яркая голова, гаснущий хвост вверх
+	float streak = smoothstep(0.0, 0.04, yphase) * (1.0 - smoothstep(0.04, 0.55, yphase));
+	float thin = 1.0 - smoothstep(0.0, 0.5, abs(fx - 0.5) * 2.0);
+	thin = pow(thin, 4.0);
+	return streak * thin * active;
+}
+
+void fragment(){
+	vec2 uv = SCREEN_UV;
+	float v = 0.0;
+	v += rain_layer(uv, 55.0,  6.0,  6.0, 0.10, 1.0) * 0.65;
+	v += rain_layer(uv, 85.0,  7.0,  8.5, 0.13, 2.0) * 0.55;
+	v += rain_layer(uv, 125.0, 8.0, 11.0, 0.16, 3.0) * 0.45;
+	v = clamp(v * u_amount, 0.0, 1.0);
+	COLOR = vec4(vec3(0.86, 0.91, 1.0), v * 0.7);
+}
+"""
+
 func _build_rain() -> void:
-	rain_node = GPUParticles3D.new()
-	# капля — тонкий вытянутый «штрих»
-	var drop := BoxMesh.new()
-	drop.size = Vector3(3.0, 80.0, 3.0)
-	var dm := StandardMaterial3D.new()
-	dm.albedo_color = Color(0.88, 0.93, 1.0, 0.85)
-	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dm.emission_enabled = true
-	dm.emission = Color(0.8, 0.86, 1.0)
-	dm.emission_energy_multiplier = 0.9
-	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	drop.material = dm
-	rain_node.draw_pass_1 = drop
-	# процесс частиц: эмиссия в боксе над камерой, падение вниз с лёгким ветром
-	var pm := ParticleProcessMaterial.new()
-	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pm.emission_box_extents = Vector3(650.0, 1.0, 480.0)
-	pm.direction = Vector3(0.18, -1.0, 0.05)
-	pm.spread = 2.0
-	pm.gravity = Vector3(60.0, -1400.0, 18.0)
-	pm.initial_velocity_min = 700.0
-	pm.initial_velocity_max = 900.0
-	pm.scale_min = 0.8
-	pm.scale_max = 1.4
-	rain_node.process_material = pm
-	rain_node.amount = 4500
-	rain_node.lifetime = 0.9
-	rain_node.preprocess = 0.9
-	rain_node.fixed_fps = 0
-	rain_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	rain_node.position = Vector3(FIELD_W * 0.5, 700.0, FIELD_H * 0.5)
-	rain_node.visible = false
-	rain_node.emitting = false
-	add_child(rain_node)
+	rain_layer2 = CanvasLayer.new()
+	rain_layer2.layer = 0   # поверх 3D и пост-эффекта, но под UI (ui.layer = 1)
+	add_child(rain_layer2)
+	var sh := Shader.new()
+	sh.code = _RAIN_SHADER
+	rain_mat = ShaderMaterial.new()
+	rain_mat.shader = sh
+	rain_mat.set_shader_parameter("u_amount", 1.0)
+	rain_rect = ColorRect.new()
+	rain_rect.material = rain_mat
+	rain_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rain_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rain_rect.visible = false
+	rain_layer2.add_child(rain_rect)
 
 func toggle_rain(on: bool) -> void:
 	rain_enabled = on
-	if rain_node:
-		rain_node.visible = on
-		rain_node.emitting = on
+	if rain_rect:
+		rain_rect.visible = on
 	_update_rain_btn()
 
 func _update_rain_btn() -> void:
@@ -2165,8 +2179,6 @@ func update_camera() -> void:
 	var dir := Vector3(0.0, cos(cam_pitch), sin(cam_pitch)).rotated(Vector3.UP, cam_yaw)
 	cam.position = cam_pivot + dir * cam_dist
 	cam.look_at(cam_pivot, Vector3.UP)
-	if rain_node and rain_enabled:
-		rain_node.position = Vector3(cam_pivot.x, 700.0, cam_pivot.z)
 
 func _smooth_camera(dt: float) -> void:
 	var a: float = 1.0 - exp(-14.0 * dt)   # плавная доводка к цели

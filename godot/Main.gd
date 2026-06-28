@@ -198,6 +198,11 @@ var fx_rect: ColorRect
 var fx_mat: ShaderMaterial
 var style_fx_buttons := {}      # индекс -> Button
 
+# дождь (отключаемый в меню)
+var rain_enabled := false
+var rain_node: GPUParticles3D
+var rain_btn: Button
+
 # камера (орбитальная, со сглаживанием как в Dorfromantik)
 var cam_pivot: Vector3                  # текущая (сглаженная) точка фокуса
 var cam_yaw := 0.0
@@ -1998,7 +2003,58 @@ func _build_environment() -> void:
 	grass.position = Vector3(FIELD_W * 0.5, -0.5, FIELD_H * 0.5)
 	add_child(grass)
 
+	_build_rain()
+
 	_apply_look()   # применить текущий пресет к окружению
+
+func _build_rain() -> void:
+	rain_node = GPUParticles3D.new()
+	# капля — тонкий вытянутый «штрих»
+	var drop := BoxMesh.new()
+	drop.size = Vector3(3.0, 80.0, 3.0)
+	var dm := StandardMaterial3D.new()
+	dm.albedo_color = Color(0.88, 0.93, 1.0, 0.85)
+	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dm.emission_enabled = true
+	dm.emission = Color(0.8, 0.86, 1.0)
+	dm.emission_energy_multiplier = 0.9
+	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	drop.material = dm
+	rain_node.draw_pass_1 = drop
+	# процесс частиц: эмиссия в боксе над камерой, падение вниз с лёгким ветром
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(650.0, 1.0, 480.0)
+	pm.direction = Vector3(0.18, -1.0, 0.05)
+	pm.spread = 2.0
+	pm.gravity = Vector3(60.0, -1400.0, 18.0)
+	pm.initial_velocity_min = 700.0
+	pm.initial_velocity_max = 900.0
+	pm.scale_min = 0.8
+	pm.scale_max = 1.4
+	rain_node.process_material = pm
+	rain_node.amount = 4500
+	rain_node.lifetime = 0.9
+	rain_node.preprocess = 0.9
+	rain_node.fixed_fps = 0
+	rain_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rain_node.position = Vector3(FIELD_W * 0.5, 700.0, FIELD_H * 0.5)
+	rain_node.visible = false
+	rain_node.emitting = false
+	add_child(rain_node)
+
+func toggle_rain(on: bool) -> void:
+	rain_enabled = on
+	if rain_node:
+		rain_node.visible = on
+		rain_node.emitting = on
+	_update_rain_btn()
+
+func _update_rain_btn() -> void:
+	if rain_btn:
+		rain_btn.text = "Дождь: вкл" if rain_enabled else "Дождь: выкл"
+		rain_btn.modulate = Color(0.6, 0.8, 1.0) if rain_enabled else Color(1, 1, 1)
 
 func _v3(c: Color) -> Vector3:
 	return Vector3(c.r, c.g, c.b)
@@ -2109,6 +2165,8 @@ func update_camera() -> void:
 	var dir := Vector3(0.0, cos(cam_pitch), sin(cam_pitch)).rotated(Vector3.UP, cam_yaw)
 	cam.position = cam_pivot + dir * cam_dist
 	cam.look_at(cam_pivot, Vector3.UP)
+	if rain_node and rain_enabled:
+		rain_node.position = Vector3(cam_pivot.x, 700.0, cam_pivot.z)
 
 func _smooth_camera(dt: float) -> void:
 	var a: float = 1.0 - exp(-14.0 * dt)   # плавная доводка к цели
@@ -2395,6 +2453,13 @@ func _build_style_menu() -> void:
 	load_btn.custom_minimum_size = Vector2(80, 28)
 	load_btn.pressed.connect(func(): load_look())
 	row.add_child(load_btn)
+	# --- погода ---
+	vb.add_child(HSeparator.new())
+	rain_btn = Button.new()
+	rain_btn.custom_minimum_size = Vector2(165, 30)
+	rain_btn.pressed.connect(func(): toggle_rain(not rain_enabled))
+	vb.add_child(rain_btn)
+	_update_rain_btn()
 	# --- переключатель художественного стиля ---
 	vb.add_child(HSeparator.new())
 	var stitle := Label.new()
